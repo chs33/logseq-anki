@@ -1,0 +1,34 @@
+{
+  "name": "logseq-anki-sync-docs",
+  "version": "0.0.0",
+  "private": true,
+  "pnpm": {
+      "overrides": {
+          "cheerio": "1.0.0-rc.12"
+      }
+  },
+  "scripts": {
+    "docusaurus:dev": "docusaurus start",
+    "docusaurus:build": "docusaurus build",
+    "docusaurus:serve": "docusaurus serve --build",
+    "preinstall": "npx only-allow pnpm"
+  },
+  "dependencies": {
+    "@docusaurus/core": "2.4.3",
+    "@docusaurus/module-type-aliases": "2.4.3",
+    "docusaurus-plugin-search-local": "^1.0.1",
+    "@docusaurus/preset-classic": "2.4.3",
+    "@giscus/react": "^2.4.0",
+    "@mdx-js/react": "^1.6.22",
+    "clsx": "^1.2.1",
+    "gifuct-js": "^2.1.2",
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "react-medium-image-zoom": "^5.4.0"
+  },
+  "devDependencies": {
+    "@tsconfig/docusaurus": "^2.0.3",
+    "prism-react-renderer": "^2.4.1",
+    "typescript": "^5.6.3"
+  }
+}

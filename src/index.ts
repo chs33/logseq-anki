@@ -1,0 +1,110 @@
+import "@logseq/libs";
+import type {LSPluginBaseInfo} from "@logseq/libs/dist/LSPlugin";
+import {Buffer} from "buffer/";
+import GITHUB_ICON from "../node_modules/@tabler/icons/icons/outline/brand-github.svg?raw";
+import HEART_ICON from "../node_modules/@tabler/icons/icons/outline/heart.svg?raw";
+import pkg from "./../package.json";
+import {AddonRegistry} from "./addons/AddonRegistry";
+import * as AnkiConnect from "./anki-connect/AnkiConnect";
+import {ClozeNote} from "./anki-notes/ClozeNote";
+import {HighlightMaskNote} from "./anki-notes/HighlightMaskNote";
+import {ImageOcclusionNote} from "./anki-notes/ImageOcclusionNote";
+import {MultilineCardNote} from "./anki-notes/MultilineCardNote";
+import {Note} from "./anki-notes/Note";
+import {SwiftArrowNote} from "./anki-notes/SwiftArrowNote";
+import {ANKI_ICON} from "./constants";
+import {createLogger, LoggerCategory, updateLoggerLevels} from "./logger";
+import {LogseqProxy} from "./logseq/LogseqProxy";
+import {WindowParentBridge} from "./logseq/WindowParentBridge";
+import {registerToolbar} from "./registerToolbar";
+import {addSettingsToLogseq} from "./settings";
+import {AutoSyncScheduler} from "./sync/AutoSyncScheduler";
+import {BlockAndPageHashCache} from "./sync/cache";
+import {LogseqToAnkiSync} from "./sync/syncLogseqToAnki";
+import {showButtonModal} from "./ui";
+import {UI} from "./ui/UI";
+
+const logger = createLogger(LoggerCategory.Others);
+
+async function main(baseInfo: LSPluginBaseInfo) {
+    // Register UI and Commands
+    const syncLogseqToAnki = async () => {
+        await new LogseqToAnkiSync().sync();
+    };
+    logseq.provideModel({
+        syncLogseqToAnki: syncLogseqToAnki
+    });
+    logseq.App.registerCommandPalette(
+        {
+            key: `logseq-anki-sync-command-palette-${baseInfo.id}`,
+            label: `Start Logseq to Anki Sync`,
+            keybinding: {mode: "global", binding: ""}
+        },
+        syncLogseqToAnki
+    );
+    registerToolbar(baseInfo);
+    updateLoggerLevels();
+    addSettingsToLogseq();
+
+    // Init various modules
+    WindowParentBridge.setGlobalObject("LogseqAnkiSync", {
+        dispatchEvent: (event: string) => {
+            WindowParentBridge.dispatchEvent(event);
+        }
+    });
+    LogseqProxy.init();
+    BlockAndPageHashCache.init();
+    Note.initLogseqOperations();
+    ClozeNote.initLogseqOperations();
+    MultilineCardNote.initLogseqOperations();
+    SwiftArrowNote.initLogseqOperations();
+    ImageOcclusionNote.initLogseqOperations();
+    HighlightMaskNote.initLogseqOperations();
+    AddonRegistry.getAll().forEach((addon) => addon.init());
+    UI.init();
+    WindowParentBridge.setGlobalObject("AnkiConnect", AnkiConnect); // Make AnkiConnect available globally
+    new AutoSyncScheduler().init();
+
+    // The lines below are needed for vite build and dev to work properly.
+    // @ts-ignore
+    window.Buffer = Buffer;
+    // @ts-ignore
+    window.process = process;
+
+    // Show welcome message
+    const {lastWelcomeVersion} = LogseqProxy.Settings.getPluginSettings();
+    if (lastWelcomeVersion && lastWelcomeVersion !== pkg.version) {
+        await new Promise((resolve) => setTimeout(resolve, 1000)); // wait logseq's react to load
+        await showButtonModal(
+            `<span class="flex items-center"><i class="px-1">${ANKI_ICON}</i>Welcome to Logseq Anki Sync ${pkg.version}!</span>
+            <div style="overflow-y: auto; margin-top: 10px; border: 1px solid var(--ls-border-color); border-radius: 4px;">
+                <iframe src="https://github.com/debanjandhar12/logseq-anki-sync/releases/tag/v${pkg.version}" style="width: 100%; height: 100%; min-height: 400px; border: none;"></iframe>
+            </div>`,
+            [
+                {
+                    name: "Donate",
+                    f: () => {
+                        window.open(`https://github.com/sponsors/debanjandhar12`);
+                    },
+                    closeOnClick: false,
+                    icon: HEART_ICON
+                },
+                {
+                    name: "Open in GitHub",
+                    f: () => {
+                        window.open(
+                            `https://github.com/debanjandhar12/logseq-anki-sync/releases/tag/v${pkg.version}`
+                        );
+                    },
+                    closeOnClick: false,
+                    icon: GITHUB_ICON
+                }
+            ],
+            {enableOutsideClickClose: false}
+        );
+    }
+    logseq.updateSettings({lastWelcomeVersion: pkg.version});
+}
+
+// Bootstrap
+logseq.ready(main).catch((e) => logger.error("Failed to initialize plugin", e));

@@ -1,0 +1,62 @@
+{
+    "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 100
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "double",
+            "semicolons": "always",
+            "trailingCommas": "none",
+            "arrowParentheses": "always",
+            "bracketSameLine": true,
+            "bracketSpacing": false,
+            "quoteProperties": "asNeeded"
+        }
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "recommended": true,
+            "style": {
+                "noNonNullAssertion": "off",
+                "useConst": "error",
+                "useTemplate": "off"
+            },
+            "correctness": {
+                "noUnusedVariables": "error",
+                "noUnusedImports": "error"
+            },
+            "complexity": {
+                "noStaticOnlyClass": "off",
+                "noUselessConstructor": "off",
+                "useLiteralKeys": "off"
+            },
+            "suspicious": {
+                "noAlert": "error",
+                "noConsole": "error",
+                "noExplicitAny": "off",
+                "noTsIgnore": "off",
+                "useIterableCallbackReturn": "off"
+            }
+        }
+    },
+    "files": {
+        "includes": [
+            "src/**",
+            "tests/**",
+            "*.ts",
+            "*.tsx",
+            "*.js",
+            "biome.json",
+            "!dist",
+            "!node_modules",
+            "!.vite_cache",
+            "!docusaurus",
+            "!**/*.html"
+        ]
+    }
+}
