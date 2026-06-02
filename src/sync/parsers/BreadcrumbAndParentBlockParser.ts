@@ -4,6 +4,7 @@ import type {Note} from "../../anki-notes/Note";
 import {ANKI_CLOZE_REGEXP, MD_PROPERTIES_REGEXP} from "../../constants";
 import {createLogger, LoggerCategory} from "../../logger";
 import getNameFromPage from "../../logseq/getNameFromPage";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 
 const logger = createLogger(LoggerCategory.SyncInternal);
@@ -119,8 +120,9 @@ export class BreadcrumbAndParentBlockParser {
         tags: Set<string>
     ): Promise<Array<{content: string; uuid: string}>> {
         const parentBlocks = [];
-        let parentID = (await LogseqProxy.Editor.getBlock(note.uuid)).parent.id;
-        let parentBlock: BlockEntity | null = await LogseqProxy.Editor.getBlock(parentID);
+        let parentID = getParentBlockIdentity(await LogseqProxy.Editor.getBlock(note.uuid));
+        let parentBlock: BlockEntity | null =
+            parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
 
         while (parentBlock != null) {
             const parentTags = _.get(parentBlock, "properties.tags", []) as string[];
@@ -136,8 +138,8 @@ export class BreadcrumbAndParentBlockParser {
                     : "Hidden Parent Block",
                 uuid: parentBlock.uuid
             });
-            parentID = parentBlock.parent.id;
-            parentBlock = await LogseqProxy.Editor.getBlock(parentID);
+            parentID = getParentBlockIdentity(parentBlock);
+            parentBlock = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
         }
 
         return parentBlocks.reverse();

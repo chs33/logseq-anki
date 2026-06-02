@@ -1,6 +1,6 @@
-import _ from "lodash";
 import type {Note} from "../../anki-notes/Note";
 import {createLogger, LoggerCategory} from "../../logger";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 import {getLogseqBlockPropSafe} from "../../utils/utils";
 
@@ -41,7 +41,7 @@ export class SuspendUnsuspendPropertyParser {
                 );
                 if (suspendValue != null)
                     return SuspendUnsuspendPropertyParser.normalizeValue(suspendValue);
-                parentBlockUUID = _.get(parentBlock, "parent.id", null);
+                parentBlockUUID = getParentBlockIdentity(parentBlock);
             }
         } catch (e) {
             logger.error(

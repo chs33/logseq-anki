@@ -82,6 +82,15 @@ describe("AutoSyncScheduler", () => {
         expect(runner).toHaveBeenCalledTimes(1);
     });
 
+    test("uses interval settings stored by Logseq as strings", async () => {
+        testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: "60"};
+        new AutoSyncScheduler(runner).init();
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(runner).toHaveBeenCalledTimes(1);
+    });
+
     test("does not overlap runs", async () => {
         testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 60};
         let resolveRun: (value: any) => void = () => {};

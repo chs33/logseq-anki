@@ -43,12 +43,28 @@ export class AutoSyncScheduler {
         this.clearTimer();
     }
 
-    static getEffectiveIntervalSeconds(intervalSeconds?: number): number {
-        if (typeof intervalSeconds !== "number" || !Number.isFinite(intervalSeconds)) {
+    static getEffectiveIntervalSeconds(intervalSeconds?: number | string): number {
+        const parsedIntervalSeconds = AutoSyncScheduler.parseIntegerSetting(intervalSeconds);
+        if (parsedIntervalSeconds === null) {
             return AutoSyncScheduler.DEFAULT_INTERVAL_SECONDS;
         }
 
-        return Math.max(AutoSyncScheduler.MIN_INTERVAL_SECONDS, Math.floor(intervalSeconds));
+        return Math.max(AutoSyncScheduler.MIN_INTERVAL_SECONDS, parsedIntervalSeconds);
+    }
+
+    private static parseIntegerSetting(value: unknown): number | null {
+        if (typeof value === "number" && Number.isFinite(value)) {
+            return Math.floor(value);
+        }
+
+        if (typeof value === "string") {
+            const trimmedValue = value.trim();
+            if (/^\d+$/.test(trimmedValue)) {
+                return Number(trimmedValue);
+            }
+        }
+
+        return null;
     }
 
     private configureFromSettings(): void {

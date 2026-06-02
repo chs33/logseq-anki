@@ -1,6 +1,7 @@
 import _ from "lodash";
 import type {Note} from "../../anki-notes/Note";
 import {createLogger, LoggerCategory} from "../../logger";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 import {getCaseInsensitive} from "../../utils/utils";
 
@@ -29,7 +30,7 @@ export class TagParser {
                 const parentBlock = await LogseqProxy.Editor.getBlock(parentBlockUUID);
                 const blockTags = getCaseInsensitive(parentBlock, "properties.tags", []);
                 tags = [...tags, ...blockTags];
-                parentBlockUUID = _.get(parentBlock, "parent.id", null);
+                parentBlockUUID = getParentBlockIdentity(parentBlock);
             }
         } catch (e) {
             logger.error("[TagParser] Error collecting tags from block hierarchy:", e);

@@ -4,6 +4,7 @@ import type {LazyAnkiNoteManager} from "../anki-connect/LazyAnkiNoteManager";
 import {MD_PROPERTIES_REGEXP, ORG_PROPERTIES_REGEXP} from "../constants";
 import {createLogger, LoggerCategory} from "../logger";
 import type {DependencyEntity} from "../logseq/getLogseqContentDirectDependencies";
+import getParentBlockIdentity from "../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../logseq/LogseqProxy";
 import type {HTMLFile} from "../logseq/LogseqToHtmlConverter";
 import {getLogseqBlockPropSafe} from "../utils/utils";
@@ -138,7 +139,7 @@ export abstract class Note {
                                 isAnkiSyncDisabled = false;
                                 break;
                             }
-                            parentBlockUUID = parentBlock?.parent?.id ?? null;
+                            parentBlockUUID = getParentBlockIdentity(parentBlock);
                         }
                     } catch (e) {
                         logger.error(e);

@@ -5,6 +5,7 @@ import _ from "lodash";
 import {MD_PROPERTIES_REGEXP, ORG_PROPERTIES_REGEXP} from "../constants";
 import {createLogger, LoggerCategory} from "../logger";
 import type {DependencyEntity} from "../logseq/getLogseqContentDirectDependencies";
+import getParentBlockIdentity from "../logseq/getParentBlockIdentity";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqProxy} from "../logseq/LogseqProxy";
 import {type HTMLFile, LogseqToHtmlConverterProxy} from "../logseq/LogseqToHtmlConverter";
@@ -281,8 +282,9 @@ export class MultilineCardNote extends Note {
         }
         logseqCardGroup_blocks = await Promise.all(
             logseqCardGroup_blocks.map(async (block) => {
-                const parent = block[0].parent.id;
-                const parentBlock = await LogseqProxy.Editor.getBlock(parent);
+                const parent = getParentBlockIdentity(block[0] as any);
+                const parentBlock =
+                    parent == null ? null : await LogseqProxy.Editor.getBlock(parent);
                 const tags = _.get(parentBlock, "properties.tags", []) as string[];
                 block[0].tagsFromParentCardGroup = [...tags];
                 block[0].propertyValuesFromParentCardGroup =

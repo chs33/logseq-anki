@@ -1,8 +1,38 @@
 import {createLogger, LoggerCategory} from "../logger";
+import {LogseqProxy} from "../logseq/LogseqProxy";
 
 const logger = createLogger(LoggerCategory.AnkiConnect);
 
-const ANKI_PORT = 8765;
+export const DEFAULT_ANKI_CONNECT_PORT = 8765;
+
+export function getAnkiConnectPort(): number {
+    const configuredPort = LogseqProxy.Settings.getPluginSettings()?.ankiConnectPort;
+    const port = parsePortSetting(configuredPort);
+    if (port === null) return DEFAULT_ANKI_CONNECT_PORT;
+
+    if (port < 1 || port > 65535) return DEFAULT_ANKI_CONNECT_PORT;
+
+    return port;
+}
+
+function parsePortSetting(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return Math.floor(value);
+    }
+
+    if (typeof value === "string") {
+        const trimmedValue = value.trim();
+        if (/^\d+$/.test(trimmedValue)) {
+            return Number(trimmedValue);
+        }
+    }
+
+    return null;
+}
+
+export function getAnkiConnectUrl(): string {
+    return `http://127.0.0.1:${getAnkiConnectPort()}`;
+}
 
 // Read https://github.com/FooSoft/anki-connect#supported-actions
 
@@ -32,7 +62,7 @@ export function invoke(action: string, params = {}): any {
             }
         });
 
-        xhr.open("POST", "http://127.0.0.1:" + ANKI_PORT.toString());
+        xhr.open("POST", getAnkiConnectUrl());
         xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
         xhr.send(JSON.stringify({action, version: 6, params}));
     });

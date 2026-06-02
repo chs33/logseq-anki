@@ -19,10 +19,11 @@ export interface PluginSettings {
     ankiFieldOptions?: ("furigana" | "kana" | "kanji" | "tts" | "tags" | "rtl")[];
     syncOverwriteList?: string[];
     inheritPropertiesFromTags?: boolean;
+    ankiConnectPort?: number | string;
     debug?: LoggerCategory[];
     skipOnDependencyHashMatch?: boolean;
     autoSyncEnabled?: boolean;
-    autoSyncIntervalSeconds?: number;
+    autoSyncIntervalSeconds?: number | string;
     autoSyncAnkiWebAfterChanges?: boolean;
     lastWelcomeVersion?: string;
 }
@@ -99,6 +100,14 @@ export const addSettingsToLogseq = async () => {
             description: "",
             type: "heading",
             default: null
+        },
+        {
+            key: "ankiConnectPort",
+            type: "number",
+            default: 8765,
+            title: "AnkiConnect port (Default: 8765)",
+            description:
+                "Port used to connect to AnkiConnect on 127.0.0.1. Change this if your AnkiConnect webBindPort is customized."
         },
         {
             key: "autoSyncHeading",

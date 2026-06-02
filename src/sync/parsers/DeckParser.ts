@@ -1,7 +1,7 @@
-import _ from "lodash";
 import type {Note} from "../../anki-notes/Note";
 import {LOGSEQ_PAGE_REF_REGEXP} from "../../constants";
 import {createLogger, LoggerCategory} from "../../logger";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 import {getLogseqBlockPropSafe} from "../../utils/utils";
 
@@ -36,7 +36,7 @@ export class DeckParser {
                 const parentBlock = await LogseqProxy.Editor.getBlock(parentBlockUUID);
                 const deck = getLogseqBlockPropSafe(parentBlock, "properties.deck");
                 if (deck != null) return deck;
-                parentBlockUUID = _.get(parentBlock, "parent.id", null);
+                parentBlockUUID = getParentBlockIdentity(parentBlock);
             }
         } catch (e) {
             logger.error("[DeckParser] Error finding deck in block hierarchy:", e);

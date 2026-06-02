@@ -10,7 +10,6 @@ import type {
 } from "@logseq/libs/dist/LSPlugin";
 import AwaitLock from "await-lock";
 import pMemoize, {pMemoizeClear} from "p-memoize";
-import platform from "platform";
 import {createLogger, LoggerCategory} from "../logger";
 import type {PluginSettings} from "../settings";
 import objectHashOptimized from "../utils/objectHashOptimized";
@@ -22,16 +21,14 @@ import {WindowParentBridge} from "./WindowParentBridge";
 
 const logger = createLogger(LoggerCategory.LogseqWrappers);
 
-/***
- * This is a cached + synchronization-safe logseq api wrapper.
- * Fixes the following issues: #58 (synchronization-safety is enabled only for macos / dev mode)
- * */
-
-const isMacOs = platform.os?.family?.includes("Mac") || platform.os?.family?.includes("OS X");
-const getLogseqLock =
-    isMacOs || process.env.NODE_ENV !== "production"
-        ? new AwaitLock()
-        : {acquireAsync: async (): Promise<void> => {}, release: async (): Promise<void> => {}};
+/**
+ * This is a cached + synchronization-safe Logseq API wrapper.
+ *
+ * Logseq API calls can return incomplete results when several DB/editor requests are
+ * in flight at once. Sync scans run multiple note-type queries in parallel, so keep
+ * access serialized on every platform, including production Windows builds.
+ */
+const getLogseqLock = new AwaitLock();
 
 export namespace LogseqProxy {
     export class Editor {

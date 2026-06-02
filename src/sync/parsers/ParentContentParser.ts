@@ -1,5 +1,7 @@
+import type {BlockEntity} from "@logseq/libs/dist/LSPlugin";
 import _ from "lodash";
 import type {Note} from "../../anki-notes/Note";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 import {LogseqToHtmlConverterProxy} from "../../logseq/LogseqToHtmlConverter";
 import {escapeClozesAndMacroDelimiters} from "../../utils/utils";
@@ -36,10 +38,12 @@ export class ParentContentParser {
 
     private static async collectParentBlocks(note: Note, tags: Set<string>) {
         const parentBlocks = [];
-        let parentID = (await LogseqProxy.Editor.getBlock(note.uuid)).parent.id;
-        let parent;
+        let parentID = getParentBlockIdentity(await LogseqProxy.Editor.getBlock(note.uuid));
 
-        while ((parent = await LogseqProxy.Editor.getBlock(parentID)) != null) {
+        while (parentID != null) {
+            const parent: BlockEntity | null = await LogseqProxy.Editor.getBlock(parentID);
+            if (parent == null) break;
+
             const parentTags = _.get(parent, "properties.tags", []) as string[];
             const hiddenParent =
                 parentTags.includes("hide-when-card-parent") ||
@@ -52,7 +56,7 @@ export class ParentContentParser {
                 hiddenParent,
                 properties: parent.properties
             });
-            parentID = parent.parent.id;
+            parentID = getParentBlockIdentity(parent);
         }
 
         return parentBlocks.reverse();

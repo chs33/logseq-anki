@@ -30,6 +30,12 @@ When an existing note's stored dependency hash still matches the current Logseq 
 
 Sync still scans eligible Logseq cards each run so it can detect new cards, changed cards, and stale Anki notes. Manual sync can still show update candidates before the hash skip is applied, but only notes with real changes are sent through the Anki update operation.
 
+## AnkiConnect Port
+
+By default, the plugin connects to AnkiConnect at `127.0.0.1:8765`.
+
+If your AnkiConnect `webBindPort` is customized, set the same value in the plugin setting **AnkiConnect port**. Invalid ports fall back to `8765`.
+
 ## What Gets Overwritten
 
 ### Always Overwritten (Cannot be Disabled)

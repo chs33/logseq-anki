@@ -9,7 +9,7 @@ import _ from "lodash";
 import {LogseqAppInfoFetcher} from "./LogseqAppInfoFetcher";
 import {LogseqProxy} from "./LogseqProxy";
 
-const DB_GRAPH_GET_BLOCK_TIMEOUT_MS = 5000;
+const DB_GRAPH_GET_BLOCK_TIMEOUT_MS = 1500;
 const UUID_REGEXP = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -274,17 +274,26 @@ export class LogseqPropertiesHelper {
         srcBlock: BlockIdentity | EntityID,
         includeChildren: boolean = false
     ): Promise<BlockEntity | null> {
-        if (typeof srcBlock !== "string" || !UUID_REGEXP.test(srcBlock)) return null;
+        let rows: any[] | null = null;
+        try {
+            if (typeof srcBlock === "string" && UUID_REGEXP.test(srcBlock)) {
+                rows = await logseq.DB.datascriptQuery(
+                    LogseqPropertiesHelper.buildDbGraphBlockByUuidQuery(srcBlock.toLowerCase())
+                );
+            } else if (typeof srcBlock === "number") {
+                rows = await logseq.DB.datascriptQuery(
+                    LogseqPropertiesHelper.buildDbGraphBlockByEntityIdQuery(srcBlock)
+                );
+            }
+        } catch (_e) {
+            return null;
+        }
 
-        const normalizedUuid = srcBlock.toLowerCase();
-        const rows = await logseq.DB.datascriptQuery(
-            LogseqPropertiesHelper.buildDbGraphBlockQuery(normalizedUuid)
-        );
         const block = LogseqPropertiesHelper.normalizeDatascriptBlock(rows?.[0]?.[0]);
-        if (!block) return null;
+        if (!block?.uuid) return null;
 
         if (includeChildren) {
-            block.children = await LogseqPropertiesHelper.getDbGraphBlockChildren(normalizedUuid);
+            block.children = await LogseqPropertiesHelper.getDbGraphBlockChildren(block.uuid);
         }
 
         return block;
@@ -306,15 +315,29 @@ export class LogseqPropertiesHelper {
         return children;
     }
 
-    private static buildDbGraphBlockQuery(uuid: string): string {
+    private static buildDbGraphBlockByUuidQuery(uuid: string): string {
         return `
             [:find (pull ?b [*
                 {:block/page [:db/id :block/uuid :block/name :block/title]}
                 {:block/parent [:db/id :block/uuid :block/title]}
+                {:block/left [:db/id :block/uuid :block/title]}
                 {:block/link [:db/id :block/uuid :block/name :block/title]}
                 {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
             :where
             [?b :block/uuid #uuid "${uuid}"]]`;
+    }
+
+    private static buildDbGraphBlockByEntityIdQuery(entityId: number): string {
+        return `
+            [:find (pull ?b [*
+                {:block/page [:db/id :block/uuid :block/name :block/title]}
+                {:block/parent [:db/id :block/uuid :block/title]}
+                {:block/left [:db/id :block/uuid :block/title]}
+                {:block/link [:db/id :block/uuid :block/name :block/title]}
+                {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
+            :where
+            [(identity ${entityId}) ?b]
+            [?b :block/uuid _]]`;
     }
 
     private static buildDbGraphChildrenQuery(parentUuid: string): string {
@@ -322,6 +345,7 @@ export class LogseqPropertiesHelper {
             [:find (pull ?child [*
                 {:block/page [:db/id :block/uuid :block/name :block/title]}
                 {:block/parent [:db/id :block/uuid :block/title]}
+                {:block/left [:db/id :block/uuid :block/title]}
                 {:block/link [:db/id :block/uuid :block/name :block/title]}
                 {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
             :where
@@ -341,6 +365,7 @@ export class LogseqPropertiesHelper {
             properties: block.properties ?? {},
             page: LogseqPropertiesHelper.normalizeDatascriptEntity(block.page),
             parent: LogseqPropertiesHelper.normalizeDatascriptEntity(block.parent),
+            left: LogseqPropertiesHelper.normalizeDatascriptEntity(block.left),
             link: LogseqPropertiesHelper.normalizeDatascriptEntity(block.link),
             tags: Array.isArray(block.tags)
                 ? block.tags.map((tag: any) =>
@@ -376,10 +401,17 @@ export class LogseqPropertiesHelper {
     ): Promise<BlockEntity | null> {
         const isDbGraph = await LogseqPropertiesHelper.checkCurrentIsDbGraph();
         let block: BlockEntity | null = null;
+
+        if (isDbGraph && !opts.includeChildren) {
+            block = await LogseqPropertiesHelper.getDbGraphBlockFromDatascript(srcBlock, false);
+        }
+
         try {
-            block = isDbGraph
-                ? await LogseqPropertiesHelper.getBlockWithTimeout(srcBlock, opts)
-                : await logseq.Editor.getBlock(srcBlock, opts);
+            if (!block) {
+                block = isDbGraph
+                    ? await LogseqPropertiesHelper.getBlockWithTimeout(srcBlock, opts)
+                    : await logseq.Editor.getBlock(srcBlock, opts);
+            }
         } catch (e) {
             if (!isDbGraph) throw e;
             block = await LogseqPropertiesHelper.getDbGraphBlockFromDatascript(

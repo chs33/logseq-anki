@@ -13,6 +13,7 @@ import pkg from "../../../package.json";
 import type {Note} from "../../anki-notes/Note";
 import {createLogger, LoggerCategory} from "../../logger";
 import getNameFromPage from "../../logseq/getNameFromPage";
+import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import getUUIDFromBlock from "../../logseq/getUUIDFromBlock";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
 import objectHashOptimized from "../../utils/objectHashOptimized";
@@ -50,19 +51,21 @@ export default class NoteHashCalculator {
         // No need to consider parent content for breadcrumbs as
         // we use the page updatedAt timestamp in hash
         // This is req since otherwise on property value change of parent block, hash won't change.
-        let parentID = (await LogseqProxy.Editor.getBlock(note.uuid)).parent.id;
+        let parentID = getParentBlockIdentity(await LogseqProxy.Editor.getBlock(note.uuid));
         let parent = null;
         const {includeParentContent} = LogseqProxy.Settings.getPluginSettings();
         if (includeParentContent) {
-            parent = await LogseqProxy.Editor.getBlock(parentID);
+            parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
             while (parent != null) {
-                const logseqBlockUUID = getUUIDFromBlock(parent) || parent.parent.id;
-                dependencies.push({
-                    type: "Block",
-                    value: logseqBlockUUID
-                });
-                parentID = parent.parent.id;
-                parent = await LogseqProxy.Editor.getBlock(parentID);
+                const logseqBlockUUID = getUUIDFromBlock(parent);
+                if (logseqBlockUUID) {
+                    dependencies.push({
+                        type: "Block",
+                        value: logseqBlockUUID
+                    });
+                }
+                parentID = getParentBlockIdentity(parent);
+                parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
             }
         }
 
@@ -95,6 +98,7 @@ export default class NoteHashCalculator {
                 "renderClozeMarcosInLogseq",
                 "hideClozeMarcosUntilHoverInLogseq",
                 "skipOnDependencyHashMatch",
+                "ankiConnectPort",
                 "autoSyncEnabled",
                 "autoSyncIntervalSeconds",
                 "autoSyncAnkiWebAfterChanges",
