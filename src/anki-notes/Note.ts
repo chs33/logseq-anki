@@ -18,7 +18,7 @@ export abstract class Note {
     public properties: any;
     public pageId: number;
     public type: string;
-    public ankiId: number;
+    public ankiId: number | null;
     public tags: string[];
     static ankiNoteManager: LazyAnkiNoteManager;
 
@@ -48,18 +48,11 @@ export abstract class Note {
         return this.content;
     }
 
-    public getAnkiId(): number {
-        if (this.ankiId) return this.ankiId;
-        const ankiNotesArr = Array.from(Note.ankiNoteManager.noteInfoMap.values());
-        const filteredankiNotesArr = ankiNotesArr.filter(
-            (note) => note.fields["uuid-type"].value === `${this.uuid}-${this.type}`
-        );
-        if (filteredankiNotesArr.length === 0) this.ankiId = null;
-        else
-            this.ankiId =
-                typeof filteredankiNotesArr[0].noteId === "number"
-                    ? filteredankiNotesArr[0].noteId
-                    : parseInt(filteredankiNotesArr[0].noteId, 10);
+    public getAnkiId(): number | null {
+        if (this.ankiId != null) return this.ankiId;
+
+        this.ankiId =
+            Note.ankiNoteManager?.getAnkiIdByUuidType(`${this.uuid}-${this.type}`) ?? null;
         return this.ankiId;
     }
 

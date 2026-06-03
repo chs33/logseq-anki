@@ -8,6 +8,7 @@
  */
 
 import _ from "lodash";
+import pMemoize, {pMemoizeClear} from "p-memoize";
 import path from "path-browserify";
 import pkg from "../../../package.json";
 import type {Note} from "../../anki-notes/Note";
@@ -16,6 +17,7 @@ import getNameFromPage from "../../logseq/getNameFromPage";
 import getParentBlockIdentity from "../../logseq/getParentBlockIdentity";
 import getUUIDFromBlock from "../../logseq/getUUIDFromBlock";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
+import {WindowParentBridge} from "../../logseq/WindowParentBridge";
 import objectHashOptimized from "../../utils/objectHashOptimized";
 import type {ParsedNoteData} from "../types";
 import {getBlockHash, getPageHash} from "./BlockAndPageHashCache";
@@ -26,23 +28,34 @@ export default class NoteHashCalculator {
     /**
      * Gets a map of asset filenames to their modifiedTime timestamps
      */
-    private static async getAssetModifiedTimeMap(): Promise<Map<string, number>> {
-        const assetModifiedTimeMap = new Map<string, number>();
-        try {
-            const files = await LogseqProxy.Assets.listFilesOfCurrentGraph();
-            if (Array.isArray(files)) {
-                for (const file of files) {
-                    const filename = path.basename(file.path);
-                    assetModifiedTimeMap.set(filename, file.modifiedTime);
+    private static readonly getAssetModifiedTimeMapMemoized = pMemoize(
+        async (): Promise<Map<string, number>> => {
+            const assetModifiedTimeMap = new Map<string, number>();
+            try {
+                const files = await LogseqProxy.Assets.listFilesOfCurrentGraph();
+                if (Array.isArray(files)) {
+                    for (const file of files) {
+                        const filename = path.basename(file.path);
+                        assetModifiedTimeMap.set(filename, file.modifiedTime);
+                    }
+                } else {
+                    throw new Error("Failed to load file list... likely called from web ver");
                 }
-            } else {
-                throw new Error("Failed to load file list... likely called from web ver");
+            } catch (e) {
+                logger.error("Error getting asset modified times", e);
             }
-        } catch (e) {
-            logger.error("Error getting asset modified times", e);
+            return assetModifiedTimeMap;
         }
-        return assetModifiedTimeMap;
+    );
+
+    private static async getAssetModifiedTimeMap(): Promise<Map<string, number>> {
+        return await NoteHashCalculator.getAssetModifiedTimeMapMemoized();
     }
+
+    static clearAssetModifiedTimeMapCache(): void {
+        pMemoizeClear(NoteHashCalculator.getAssetModifiedTimeMapMemoized);
+    }
+
     public static async getHash(note: Note, ankiFields: ParsedNoteData): Promise<number> {
         const toHash = [];
         const dependencies = note.getBlockDependencies();
@@ -136,4 +149,10 @@ export default class NoteHashCalculator {
         // Return hash
         return objectHashOptimized(toHash);
     }
+}
+
+if (typeof window !== "undefined") {
+    WindowParentBridge.addEventListener("syncLogseqToAnkiComplete", () => {
+        NoteHashCalculator.clearAssetModifiedTimeMapCache();
+    });
 }

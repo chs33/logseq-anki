@@ -12,14 +12,18 @@ export class AddNoteOperation {
     private queue2: AnkiActionQueue = new AnkiActionQueue();
     private uuidTypeQueue1: string[] = [];
     private uuidTypeQueue2: string[] = [];
+    private queuedDeckNames: Set<string> = new Set();
 
     addNote(deckName: string, modelName: string, fields: AnkiNoteFields, tags: string[]): void {
         // Queue 1: Create deck + add note with placeholder cloze
-        this.queue1.push({
-            action: "createDeck",
-            params: {deck: deckName}
-        });
-        this.uuidTypeQueue1.push(fields["uuid-type"]);
+        if (!this.queuedDeckNames.has(deckName)) {
+            this.queue1.push({
+                action: "createDeck",
+                params: {deck: deckName}
+            });
+            this.uuidTypeQueue1.push(fields["uuid-type"]);
+            this.queuedDeckNames.add(deckName);
+        }
 
         const cloze_id = _.get(ANKI_CLOZE_REGEXP.exec(fields["Text"]), 2) || 1;
         this.queue1.push({
@@ -121,6 +125,7 @@ export class AddNoteOperation {
         this.queue2.clear();
         this.uuidTypeQueue1 = [];
         this.uuidTypeQueue2 = [];
+        this.queuedDeckNames = new Set();
 
         logger.info("Add notes operation completed", {successfulNotes, failedNotes});
         return {

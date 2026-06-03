@@ -101,18 +101,26 @@ export class LogseqToAnkiSync {
     private async performSync(
         options: Required<Pick<LogseqToAnkiSyncOptions, "mode">> & LogseqToAnkiSyncOptions
     ): Promise<LogseqToAnkiSyncOutcome> {
+        const syncStartedAtMs = Date.now();
+        const syncStartedAt = new Date(syncStartedAtMs).toISOString();
         const isAutoSync = options.mode === "auto";
         this.graphName = await this.getGraphName();
         this.modelName = this.getModelName();
         logger.success(`Starting Logseq to Anki Sync V${pkg.version} for graph ${this.graphName}`);
 
-        await this.setupAnkiModel();
-        const ankiNoteManager = await this.initializeAnkiNoteManager();
+        await this.measureSyncPhase("setup Anki model", () => this.setupAnkiModel());
+        const ankiNoteManager = await this.measureSyncPhase("initialize Anki cache", () =>
+            this.initializeAnkiNoteManager()
+        );
 
-        const notes = await this.collectAllNotes(isAutoSync);
+        const notes = await this.measureSyncPhase("collect Logseq notes", () =>
+            this.collectAllNotes(isAutoSync)
+        );
         await this.persistLogseqBlockIds(notes);
 
-        const syncPlan = await this.createSyncPlan(notes, ankiNoteManager);
+        const syncPlan = await this.measureSyncPhase("create sync plan", () =>
+            this.createSyncPlan(notes, ankiNoteManager)
+        );
         const {toCreateNotesOriginal, toUpdateNotesOriginal, toDeleteNotesOriginal} = syncPlan;
 
         const confirmation = isAutoSync
@@ -141,6 +149,7 @@ export class LogseqToAnkiSync {
 
         await this.performPostSyncCleanup(syncResult.toCreateNotes);
         await this.performAnkiWebSyncIfNeeded(syncResult, options);
+        this.attachSyncTiming(syncResult, options.mode, syncStartedAtMs, syncStartedAt);
 
         WindowParentBridge.dispatchLogseqAnkiSyncEvent("syncLogseqToAnkiComplete");
         WindowParentBridge.setGlobalObject("lastSyncLogseqToAnkiResult", syncResult);
@@ -151,6 +160,19 @@ export class LogseqToAnkiSync {
         }
 
         return {status: "completed", changed: syncResult.changed, result: syncResult};
+    }
+
+    private attachSyncTiming(
+        syncResult: SyncResult,
+        mode: "manual" | "auto",
+        startedAtMs: number,
+        startedAt: string
+    ): void {
+        const completedAtMs = Date.now();
+        syncResult.mode = mode;
+        syncResult.startedAt = startedAt;
+        syncResult.completedAt = new Date(completedAtMs).toISOString();
+        syncResult.durationMs = completedAtMs - startedAtMs;
     }
 
     private async createNotes(
@@ -264,7 +286,7 @@ export class LogseqToAnkiSync {
     private async collectAllNotes(silentProgress = false): Promise<Note[]> {
         const scanNotification = new ProgressNotification(
             `Scanning Logseq Graph <span style="opacity: 0.8">[${this.graphName}]</span>:`,
-            6,
+            5,
             "graph",
             {silent: silentProgress}
         );
@@ -298,8 +320,6 @@ export class LogseqToAnkiSync {
         ];
         notes = [...notes, ...(await MultilineCardNote.getNotesFromLogseqBlocks(notes))];
         scanNotification.increment();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        scanNotification.increment();
 
         return await sortAsync(notes, async (a) => {
             return (await LogseqProxy.Editor.getBlock(a.uuid))?.id ?? 0;
@@ -325,19 +345,20 @@ export class LogseqToAnkiSync {
         const toCreateNotesOriginal: Note[] = [];
         const toUpdateNotesOriginal: Note[] = [];
         const toDeleteNotesOriginal: number[] = [];
+        const noteAnkiIds = new Set<number>();
 
         for (const note of notes) {
-            const ankiId = await note.getAnkiId();
+            const ankiId = note.getAnkiId();
             if (ankiId == null || Number.isNaN(ankiId)) toCreateNotesOriginal.push(note);
-            else toUpdateNotesOriginal.push(note);
+            else {
+                toUpdateNotesOriginal.push(note);
+                noteAnkiIds.add(ankiId);
+            }
         }
 
-        const noteAnkiIds: Array<number> = await Promise.all(
-            notes.map((block) => block.getAnkiId())
-        );
-        const AnkiIds: Array<number> = [...ankiNoteManager.noteInfoMap.keys()];
-        for (const ankiId of AnkiIds) {
-            if (!noteAnkiIds.includes(ankiId)) {
+        const ankiIds: Array<number> = [...ankiNoteManager.noteInfoMap.keys()];
+        for (const ankiId of ankiIds) {
+            if (!noteAnkiIds.has(ankiId)) {
                 toDeleteNotesOriginal.push(ankiId);
             }
         }
@@ -445,26 +466,18 @@ export class LogseqToAnkiSync {
             {silent: options.silentProgress}
         );
 
-        const createdNotes = await this.createNotes(
-            toCreateNotes,
-            failedCreated,
-            ankiNoteManager,
-            syncNotificationObj
+        const createdNotes = await this.measureSyncPhase("create notes", () =>
+            this.createNotes(toCreateNotes, failedCreated, ankiNoteManager, syncNotificationObj)
         );
-        const updateResult = await this.updateNotes(
-            toUpdateNotes,
-            failedUpdated,
-            ankiNoteManager,
-            syncNotificationObj,
-            {autoSync: options.autoSync}
+        const updateResult = await this.measureSyncPhase("update notes", () =>
+            this.updateNotes(toUpdateNotes, failedUpdated, ankiNoteManager, syncNotificationObj, {
+                autoSync: options.autoSync
+            })
         );
         const updatedNotes = updateResult.updated;
         const skippedUpdateNotes = updateResult.skipped;
-        const deletedNotes = await this.deleteNotes(
-            toDeleteNotes,
-            failedDeleted,
-            ankiNoteManager,
-            syncNotificationObj
+        const deletedNotes = await this.measureSyncPhase("delete notes", () =>
+            this.deleteNotes(toDeleteNotes, failedDeleted, ankiNoteManager, syncNotificationObj)
         );
 
         let suspended = 0;
@@ -484,10 +497,10 @@ export class LogseqToAnkiSync {
         }
 
         syncNotificationObj.updateMessage("Syncing logseq assets to anki...");
-        const mediaUpdated = await this.updateAssets(ankiNoteManager);
+        const mediaUpdated = await this.measureSyncPhase("sync assets", () =>
+            this.updateAssets(ankiNoteManager)
+        );
         syncNotificationObj.increment(twentyPercent);
-        await AnkiConnect.invoke("reloadCollection", {});
-        syncNotificationObj.increment();
 
         const changed =
             createdNotes.length > 0 ||
@@ -496,6 +509,15 @@ export class LogseqToAnkiSync {
             mediaUpdated > 0 ||
             suspended > 0 ||
             unsuspended > 0;
+
+        if (changed) {
+            await this.measureSyncPhase("reload Anki collection", () =>
+                AnkiConnect.invoke("reloadCollection", {})
+            );
+        } else {
+            logger.info("Skipping Anki collection reload because sync made no changes");
+        }
+        syncNotificationObj.increment();
 
         logger.info("Sync completed", {
             timeTaken: `${(performance.now() - start_time).toFixed(2)}ms`,
@@ -686,5 +708,23 @@ export class LogseqToAnkiSync {
     private completeSyncCleanup(): void {
         WindowParentBridge.dispatchLogseqAnkiSyncEvent("syncLogseqToAnkiComplete");
         logger.info("Sync cleanup completed");
+    }
+
+    private async measureSyncPhase<T>(phase: string, task: () => Promise<T>): Promise<T> {
+        const startTime = performance.now();
+        try {
+            const result = await task();
+            logger.info("Sync phase completed", {
+                phase,
+                timeTaken: `${(performance.now() - startTime).toFixed(2)}ms`
+            });
+            return result;
+        } catch (e) {
+            logger.warn("Sync phase failed", {
+                phase,
+                timeTaken: `${(performance.now() - startTime).toFixed(2)}ms`
+            });
+            throw e;
+        }
     }
 }

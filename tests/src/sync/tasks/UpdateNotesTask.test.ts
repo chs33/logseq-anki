@@ -44,6 +44,7 @@ function createNote() {
 function createAnkiNoteManager(
     options: {mediaInfo?: Set<string>; successfulNotes?: string[]} = {}
 ) {
+    const mediaInfo = options.mediaInfo ?? new Set(["existing.png"]);
     return {
         noteInfoMap: new Map([
             [
@@ -65,7 +66,7 @@ function createAnkiNoteManager(
                 }
             ]
         ]),
-        mediaInfo: options.mediaInfo ?? new Set(["existing.png"]),
+        hasMedia: vi.fn(async (filename: string) => mediaInfo.has(filename)),
         storeAsset: vi.fn(),
         updateNote: vi.fn(),
         executeUpdateNotes: vi.fn().mockResolvedValue({
@@ -102,6 +103,7 @@ describe("UpdateNotesTask", () => {
 
         expect(parseNoteMock).not.toHaveBeenCalled();
         expect(ankiNoteManager.updateNote).not.toHaveBeenCalled();
+        expect(ankiNoteManager.hasMedia).toHaveBeenCalledWith("existing.png");
         expect(ankiNoteManager.storeAsset).not.toHaveBeenCalled();
         expect(result.succeeded).toEqual([]);
         expect(result.skipped).toEqual([note]);
@@ -127,6 +129,7 @@ describe("UpdateNotesTask", () => {
 
         expect(parseNoteMock).not.toHaveBeenCalled();
         expect(ankiNoteManager.updateNote).not.toHaveBeenCalled();
+        expect(ankiNoteManager.hasMedia).toHaveBeenCalledWith("existing.png");
         expect(makeAssetUrlMock).toHaveBeenCalledWith("../assets/existing.png");
         expect(ankiNoteManager.storeAsset).toHaveBeenCalledWith(
             "existing.png",

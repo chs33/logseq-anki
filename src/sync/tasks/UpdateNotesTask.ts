@@ -164,7 +164,7 @@ export class UpdateNotesTask {
     ): Promise<void> {
         for (const asset of assets) {
             const name = path.basename(asset);
-            if (ankiNoteManager.mediaInfo.has(name)) continue;
+            if (await ankiNoteManager.hasMedia(name)) continue;
 
             const url = await WindowParentBridge.makeAssetUrl(asset);
             ankiNoteManager.storeAsset(name, url);

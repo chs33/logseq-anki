@@ -1,3 +1,4 @@
+// biome-ignore lint/style/useImportType: React is required as a runtime value with tsconfig jsx: react.
 import React from "../../React";
 
 export interface ModalHeaderProps {

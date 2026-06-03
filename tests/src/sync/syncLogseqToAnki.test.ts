@@ -1,10 +1,25 @@
 import {beforeEach, describe, expect, test, vi} from "vitest";
 import type {SyncResult} from "../../../src/sync/types";
 
+const progressNotificationMock = vi.hoisted(() =>
+    vi.fn(function ProgressNotification() {
+        this.increment = vi.fn();
+        this.updateMessage = vi.fn();
+    })
+);
+
 const ankiConnectMock = vi.hoisted(() => ({
     invoke: vi.fn(),
     requestPermission: vi.fn(),
     upsertModel: vi.fn()
+}));
+
+const windowParentBridgeMock = vi.hoisted(() => ({
+    addEventListener: vi.fn(),
+    dispatchLogseqAnkiSyncEvent: vi.fn(),
+    dispatchEvent: vi.fn(),
+    getDocument: vi.fn(() => document),
+    setGlobalObject: vi.fn()
 }));
 
 vi.mock("../../../src/anki-connect/AnkiConnect", () => ankiConnectMock);
@@ -16,13 +31,14 @@ vi.mock("../../../src/logseq/LogseqAppInfoFetcher", () => ({
 }));
 
 vi.mock("../../../src/logseq/WindowParentBridge", () => ({
-    WindowParentBridge: {
-        addEventListener: vi.fn(),
-        dispatchLogseqAnkiSyncEvent: vi.fn(),
-        dispatchEvent: vi.fn(),
-        getDocument: vi.fn(() => document),
-        setGlobalObject: vi.fn()
-    }
+    WindowParentBridge: windowParentBridgeMock
+}));
+
+vi.mock("../../../src/ui", () => ({
+    ProgressNotification: progressNotificationMock,
+    showConfirmModal: vi.fn(),
+    showSyncResultDialog: vi.fn(),
+    showSyncSelectionDialog: vi.fn()
 }));
 
 import {LogseqToAnkiSync} from "../../../src/sync/syncLogseqToAnki";
@@ -71,6 +87,24 @@ function buildSync(result: SyncResult) {
     sync.displayResults = vi.fn();
     sync.displayAutoResults = vi.fn();
     return sync;
+}
+
+function expectSyncTiming(result: SyncResult | undefined, mode: "manual" | "auto") {
+    expect(result).toBeDefined();
+    expect(result?.mode).toBe(mode);
+    expect(result?.startedAt).toEqual(expect.any(String));
+    expect(result?.completedAt).toEqual(expect.any(String));
+    expect(Date.parse(result?.startedAt ?? "")).not.toBeNaN();
+    expect(Date.parse(result?.completedAt ?? "")).not.toBeNaN();
+    expect(result?.durationMs).toEqual(expect.any(Number));
+    expect(result?.durationMs).toBeGreaterThanOrEqual(0);
+}
+
+function getStoredLastSyncResult(): SyncResult | undefined {
+    const call = windowParentBridgeMock.setGlobalObject.mock.calls.find(
+        ([key]) => key === "lastSyncLogseqToAnkiResult"
+    );
+    return call?.[1];
 }
 
 describe("LogseqToAnkiSync modes", () => {
@@ -130,6 +164,29 @@ describe("LogseqToAnkiSync modes", () => {
         );
     });
 
+    test("manual sync stores duration metadata on the completed result", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        const outcome = await sync.sync();
+
+        expect(outcome.status).toBe("completed");
+        expectSyncTiming(outcome.result, "manual");
+        expectSyncTiming(getStoredLastSyncResult(), "manual");
+    });
+
+    test("auto no-change sync still stores last sync details with duration metadata", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+
+        expect(outcome.status).toBe("completed");
+        expectSyncTiming(outcome.result, "auto");
+        expectSyncTiming(getStoredLastSyncResult(), "auto");
+        expect(sync.displayAutoResults).toHaveBeenCalledWith(
+            expect.objectContaining({changed: false, mode: "auto"})
+        );
+    });
+
     test("AnkiWeb sync runs after auto mode changes", async () => {
         const sync = buildSync(createSyncResult(true));
 
@@ -144,5 +201,89 @@ describe("LogseqToAnkiSync modes", () => {
         await sync.sync({mode: "auto", triggerAnkiWebSync: true});
 
         expect(ankiConnectMock.invoke).not.toHaveBeenCalledWith("sync", {});
+    });
+});
+
+describe("LogseqToAnkiSync sync planning", () => {
+    function createPlanNote(uuid: string, ankiId: number | null) {
+        return {
+            uuid,
+            type: "cloze",
+            getAnkiId: vi.fn(() => ankiId)
+        };
+    }
+
+    test("classifies create, update, and delete candidates without changing behavior", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        const newNote = createPlanNote("new-note", null);
+        const existingNote = createPlanNote("existing-note", 100);
+        const ankiNoteManager = {
+            noteInfoMap: new Map([
+                [100, {}],
+                [200, {}]
+            ])
+        };
+
+        const result = await sync.createSyncPlan(
+            [newNote, existingNote] as any,
+            ankiNoteManager as any
+        );
+
+        expect(result.toCreateNotesOriginal).toEqual([newNote]);
+        expect(result.toUpdateNotesOriginal).toEqual([existingNote]);
+        expect(result.toDeleteNotesOriginal).toEqual([200]);
+    });
+
+    test("uses set semantics for deletion detection on large note lists", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        const notes = Array.from({length: 5000}, (_, index) =>
+            createPlanNote(`note-${index}`, index + 1)
+        );
+        const noteInfoMap = new Map(notes.map((note) => [note.getAnkiId(), {}]));
+        noteInfoMap.set(9999, {});
+
+        const result = await sync.createSyncPlan(notes as any, {noteInfoMap} as any);
+
+        expect(result.toCreateNotesOriginal).toEqual([]);
+        expect(result.toUpdateNotesOriginal).toHaveLength(5000);
+        expect(result.toDeleteNotesOriginal).toEqual([9999]);
+    });
+});
+
+describe("LogseqToAnkiSync execution", () => {
+    test("skips Anki collection reload when nothing changed", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        sync.createNotes = vi.fn().mockResolvedValue([]);
+        sync.updateNotes = vi.fn().mockResolvedValue({updated: [], skipped: []});
+        sync.deleteNotes = vi.fn().mockResolvedValue([]);
+        sync.updateAssets = vi.fn().mockResolvedValue(0);
+
+        const result = await sync.executeSyncPlan([], [], [], {} as any, {
+            autoSync: true,
+            silentProgress: true,
+            skippedDelete: 0
+        });
+
+        expect(result.changed).toBe(false);
+        expect(ankiConnectMock.invoke).not.toHaveBeenCalledWith("reloadCollection", {});
+    });
+
+    test("reloads Anki collection after a changed sync", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        const createdNote = {uuid: "created", type: "cloze"};
+        sync.createNotes = vi.fn().mockResolvedValue([createdNote]);
+        sync.updateNotes = vi.fn().mockResolvedValue({updated: [], skipped: []});
+        sync.deleteNotes = vi.fn().mockResolvedValue([]);
+        sync.updateAssets = vi.fn().mockResolvedValue(0);
+        ankiConnectMock.invoke.mockResolvedValue(null);
+
+        const result = await sync.executeSyncPlan([createdNote], [], [], {} as any, {
+            autoSync: true,
+            silentProgress: true,
+            skippedDelete: 0
+        });
+
+        expect(result.changed).toBe(true);
+        expect(ankiConnectMock.invoke).toHaveBeenCalledWith("reloadCollection", {});
     });
 });

@@ -6,15 +6,26 @@ import {Modal, ModalHeader, useModal} from "../";
 import React, {useState} from "../React";
 import {UI} from "../UI";
 import {CreateLineDisplay, UpdateLineDisplay} from "./SyncSelectionDialog";
+import {formatSyncCompletedAt, formatSyncDuration, formatSyncMode} from "./syncResultFormatting";
 
 const logger = createLogger(LoggerCategory.UI);
+
+const showErrorDetailsButtonStyle = {
+    background: "transparent",
+    border: "none",
+    color: "var(--ls-link-text-color)",
+    cursor: "pointer",
+    fontSize: "14px",
+    marginLeft: "5px",
+    padding: 0
+};
 
 export const SyncResultDialogComponent: React.FC<{
     syncResult: SyncResult;
     resolve: (value: any) => void;
     reject: (error: any) => void;
     modalContext?: {modalId: string | null};
-}> = ({syncResult, resolve, reject, modalContext}) => {
+}> = ({syncResult, resolve, modalContext}) => {
     const {
         toCreateNotes: createdNotes,
         toUpdateNotes: updatedNotes,
@@ -59,6 +70,45 @@ export const SyncResultDialogComponent: React.FC<{
                     <div
                         className="mt-3 sm:mt-0 ml-4 mr-4 flex"
                         style={{width: "100%", flexDirection: "column"}}>
+                        <div
+                            className="p-4"
+                            style={{
+                                backgroundColor: "var(--ls-tertiary-background-color)",
+                                borderRadius: "0.25rem",
+                                marginTop: "0.5rem",
+                                marginBottom: "0.5rem",
+                                padding: "0.5rem",
+                                userSelect: "none",
+                                zIndex: 1
+                            }}>
+                            <div
+                                style={{
+                                    fontSize: "14px",
+                                    fontWeight: 600,
+                                    marginBottom: "0.35rem"
+                                }}>
+                                Summary
+                            </div>
+                            <div
+                                style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "max-content minmax(0, 1fr)",
+                                    columnGap: "0.75rem",
+                                    rowGap: "0.25rem",
+                                    fontSize: "14px"
+                                }}>
+                                <span style={{color: "var(--ls-secondary-text-color)"}}>Mode</span>
+                                <span>{formatSyncMode(syncResult.mode)}</span>
+                                <span style={{color: "var(--ls-secondary-text-color)"}}>
+                                    Time spent
+                                </span>
+                                <span>{formatSyncDuration(syncResult.durationMs)}</span>
+                                <span style={{color: "var(--ls-secondary-text-color)"}}>
+                                    Completed
+                                </span>
+                                <span>{formatSyncCompletedAt(syncResult.completedAt)}</span>
+                            </div>
+                        </div>
                         <div
                             className="p-4"
                             style={{
@@ -115,8 +165,9 @@ export const SyncResultDialogComponent: React.FC<{
                                         ⚠
                                     </span>
                                     <CreateLineDisplay note={{uuid, type}} graphName={graphName} />
-                                    <a
-                                        style={{fontSize: "14px", marginLeft: "5px"}}
+                                    <button
+                                        type="button"
+                                        style={showErrorDetailsButtonStyle}
                                         onClick={() => {
                                             const error = failedCreated[noteUuidTypeStr];
                                             logger.info(
@@ -129,7 +180,7 @@ export const SyncResultDialogComponent: React.FC<{
                                             });
                                         }}>
                                         (show error details)
-                                    </a>
+                                    </button>
                                 </span>
                             );
                         })}
@@ -154,8 +205,9 @@ export const SyncResultDialogComponent: React.FC<{
                             {Object.keys(failedDeleted).length > 0 ? (
                                 <span>
                                     The ${Object.keys(failedDeleted).length} notes failed to delete
-                                    <a
-                                        style={{fontSize: "14px", marginLeft: "5px"}}
+                                    <button
+                                        type="button"
+                                        style={showErrorDetailsButtonStyle}
                                         onClick={() => {
                                             logger.info(
                                                 `Error object for all failed deletes:`,
@@ -167,7 +219,7 @@ export const SyncResultDialogComponent: React.FC<{
                                             });
                                         }}>
                                         (show error details)
-                                    </a>
+                                    </button>
                                 </span>
                             ) : (
                                 ``
@@ -228,8 +280,9 @@ export const SyncResultDialogComponent: React.FC<{
                                         ⚠
                                     </span>
                                     <UpdateLineDisplay note={{uuid, type}} graphName={graphName} />
-                                    <a
-                                        style={{fontSize: "14px", marginLeft: "5px"}}
+                                    <button
+                                        type="button"
+                                        style={showErrorDetailsButtonStyle}
                                         onClick={() => {
                                             const error = failedUpdated[noteUuidTypeStr];
                                             logger.info(
@@ -242,7 +295,7 @@ export const SyncResultDialogComponent: React.FC<{
                                             });
                                         }}>
                                         (show error details)
-                                    </a>
+                                    </button>
                                 </span>
                             );
                         })}

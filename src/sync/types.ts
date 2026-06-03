@@ -20,6 +20,14 @@ export type ParsedNoteData = [
  * Contains result info from syncing.
  */
 export interface SyncResult {
+    /** Sync trigger mode. Optional for older persisted last-sync results. */
+    mode?: "manual" | "auto";
+    /** ISO timestamp captured before sync work begins. Optional for older persisted results. */
+    startedAt?: string;
+    /** ISO timestamp captured after sync work completes. Optional for older persisted results. */
+    completedAt?: string;
+    /** Total wall-clock sync duration in milliseconds. Optional for older persisted results. */
+    durationMs?: number;
     /** Notes that were successfully created */
     toCreateNotes: Note[];
     /** Notes that were successfully updated */

@@ -30,7 +30,6 @@ export class LazyAnkiNoteManager {
 
     async init(): Promise<void> {
         await this.cache.buildNoteInfoMap(this.modelName);
-        await this.cache.buildMediaInfo();
     }
 
     get noteInfoMap(): Map<number, AnkiNoteInfo> {
@@ -38,7 +37,15 @@ export class LazyAnkiNoteManager {
     }
 
     get mediaInfo(): Set<string> {
-        return this.cache["mediaInfo"];
+        return this.cache.mediaInfoRaw;
+    }
+
+    getAnkiIdByUuidType(uuidType: string): number | null {
+        return this.cache.getNoteIdByUuidType(uuidType);
+    }
+
+    async hasMedia(filename: string): Promise<boolean> {
+        return await this.cache.hasMedia(filename);
     }
 
     addNote(deckName: string, modelName: string, fields: AnkiNoteFields, tags: string[]): void {
