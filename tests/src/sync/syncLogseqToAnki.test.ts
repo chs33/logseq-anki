@@ -22,6 +22,8 @@ const windowParentBridgeMock = vi.hoisted(() => ({
     setGlobalObject: vi.fn()
 }));
 
+const updateNotesTaskExecuteMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../../../src/anki-connect/AnkiConnect", () => ankiConnectMock);
 
 vi.mock("../../../src/logseq/LogseqAppInfoFetcher", () => ({
@@ -41,6 +43,15 @@ vi.mock("../../../src/ui", () => ({
     showSyncSelectionDialog: vi.fn()
 }));
 
+vi.mock("../../../src/sync/tasks/UpdateNotesTask", () => ({
+    UpdateNotesTask: vi.fn(function UpdateNotesTask() {
+        return {
+            execute: updateNotesTaskExecuteMock
+        };
+    })
+}));
+
+import {LogseqProxy} from "../../../src/logseq/LogseqProxy";
 import {LogseqToAnkiSync} from "../../../src/sync/syncLogseqToAnki";
 
 const createNote = {uuid: "create-uuid", type: "cloze", properties: {id: "create-uuid"}};
@@ -67,6 +78,7 @@ function createSyncResult(changed: boolean): SyncResult {
 function buildSync(result: SyncResult) {
     const sync = new LogseqToAnkiSync() as any;
     sync.getGraphName = vi.fn().mockResolvedValue("Graph");
+    sync.getLogseqLinkGraphName = vi.fn().mockResolvedValue("Graph");
     sync.getModelName = vi.fn().mockReturnValue("GraphModel");
     sync.setupAnkiModel = vi.fn().mockResolvedValue(undefined);
     sync.initializeAnkiNoteManager = vi.fn().mockResolvedValue({noteInfoMap: new Map()});
@@ -136,6 +148,25 @@ describe("LogseqToAnkiSync modes", () => {
                 autoSync: true,
                 silentProgress: true,
                 skippedDelete: 1
+            }
+        );
+    });
+
+    test("force regenerate mode propagates to sync plan execution", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        await sync.sync({forceRegenerate: true});
+
+        expect(sync.executeSyncPlan).toHaveBeenCalledWith(
+            [createNote],
+            [updateNote],
+            [123],
+            expect.anything(),
+            {
+                autoSync: false,
+                silentProgress: false,
+                skippedDelete: 0,
+                forceRegenerate: true
             }
         );
     });
@@ -285,5 +316,49 @@ describe("LogseqToAnkiSync execution", () => {
 
         expect(result.changed).toBe(true);
         expect(ankiConnectMock.invoke).toHaveBeenCalledWith("reloadCollection", {});
+    });
+
+    test("force regenerate mode disables update hash skipping", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        sync.modelName = "Model";
+        sync.logseqLinkGraphName = "LinkGraph";
+        const failedUpdated = {};
+        const ankiNoteManager = {};
+        const progressNotification = {increment: vi.fn()};
+        const getCurrentGraphSpy = vi
+            .spyOn(LogseqProxy.App, "getCurrentGraph")
+            .mockResolvedValue({path: "/graph"} as any);
+        const getPluginSettingsSpy = vi
+            .spyOn(LogseqProxy.Settings, "getPluginSettings")
+            .mockReturnValue({skipOnDependencyHashMatch: true} as any);
+        updateNotesTaskExecuteMock.mockResolvedValue({
+            succeeded: [updateNote],
+            skipped: [],
+            failed: {}
+        });
+
+        try {
+            await sync.updateNotes(
+                [updateNote as any],
+                failedUpdated,
+                ankiNoteManager,
+                progressNotification,
+                {autoSync: false, forceRegenerate: true}
+            );
+
+            expect(updateNotesTaskExecuteMock).toHaveBeenCalledWith(
+                [updateNote],
+                "Model",
+                "LinkGraph",
+                "/graph",
+                ankiNoteManager,
+                progressNotification,
+                {skipUnchangedNotes: false}
+            );
+            expect(getPluginSettingsSpy).not.toHaveBeenCalled();
+        } finally {
+            getCurrentGraphSpy.mockRestore();
+            getPluginSettingsSpy.mockRestore();
+        }
     });
 });

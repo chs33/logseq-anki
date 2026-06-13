@@ -2,6 +2,7 @@ import BOOK_ICON from "@tabler/icons/outline/book.svg?raw";
 import HEART_ICON from "@tabler/icons/outline/heart.svg?raw";
 import LOGS_ICON from "@tabler/icons/outline/logs.svg?raw";
 import PLAYER_PLAY_ICON from "@tabler/icons/outline/player-play.svg?raw";
+import REFRESH_ICON from "@tabler/icons/outline/refresh.svg?raw";
 import SETTINGS_ICON from "@tabler/icons/outline/settings.svg?raw";
 import TOGGLE_LEFT_ICON from "@tabler/icons/outline/toggle-left.svg?raw";
 import TOGGLE_RIGHT_ICON from "@tabler/icons/outline/toggle-right.svg?raw";
@@ -69,6 +70,15 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
             color: "text-green-500",
             onClick: async () => {
                 await new LogseqToAnkiSync().sync();
+            }
+        },
+        {
+            key: "force-regenerate",
+            icon: REFRESH_ICON,
+            text: "Force Regenerate All",
+            color: "text-orange-500",
+            onClick: async () => {
+                await new LogseqToAnkiSync().sync({forceRegenerate: true});
             }
         },
         {

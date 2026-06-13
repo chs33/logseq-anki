@@ -40,6 +40,7 @@ const logger = createLogger(LoggerCategory.SyncMain);
 export interface LogseqToAnkiSyncOptions {
     mode?: "manual" | "auto";
     triggerAnkiWebSync?: boolean;
+    forceRegenerate?: boolean;
 }
 
 export interface LogseqToAnkiSyncOutcome {
@@ -49,9 +50,17 @@ export interface LogseqToAnkiSyncOutcome {
     error?: unknown;
 }
 
+interface ExecuteSyncPlanOptions {
+    autoSync: boolean;
+    silentProgress: boolean;
+    skippedDelete: number;
+    forceRegenerate?: boolean;
+}
+
 export class LogseqToAnkiSync {
     static isSyncing: boolean;
     graphName: string;
+    logseqLinkGraphName: string;
     modelName: string;
 
     public async sync(options: LogseqToAnkiSyncOptions = {}): Promise<LogseqToAnkiSyncOutcome> {
@@ -105,6 +114,7 @@ export class LogseqToAnkiSync {
         const syncStartedAt = new Date(syncStartedAtMs).toISOString();
         const isAutoSync = options.mode === "auto";
         this.graphName = await this.getGraphName();
+        this.logseqLinkGraphName = await this.getLogseqLinkGraphName();
         this.modelName = this.getModelName();
         logger.success(`Starting Logseq to Anki Sync V${pkg.version} for graph ${this.graphName}`);
 
@@ -143,7 +153,8 @@ export class LogseqToAnkiSync {
             {
                 autoSync: isAutoSync,
                 silentProgress: isAutoSync,
-                skippedDelete: isAutoSync ? toDeleteNotesOriginal.length : 0
+                skippedDelete: isAutoSync ? toDeleteNotesOriginal.length : 0,
+                ...(options.forceRegenerate === true ? {forceRegenerate: true} : {})
             }
         );
 
@@ -186,7 +197,7 @@ export class LogseqToAnkiSync {
         const result = await task.execute(
             toCreateNotes,
             this.modelName,
-            this.graphName,
+            this.logseqLinkGraphName,
             graphPath,
             ankiNoteManager,
             syncNotificationObj
@@ -200,17 +211,18 @@ export class LogseqToAnkiSync {
         failedUpdated: {[key: string]: Error},
         ankiNoteManager: LazyAnkiNoteManager,
         syncNotificationObj: ProgressNotification,
-        options: {autoSync: boolean}
+        options: {autoSync: boolean; forceRegenerate?: boolean}
     ): Promise<{updated: Note[]; skipped: Note[]}> {
         const graphPath = (await LogseqProxy.App.getCurrentGraph()).path;
         const task = new UpdateNotesTask();
         const skipUnchangedNotes =
-            options.autoSync ||
-            LogseqProxy.Settings.getPluginSettings().skipOnDependencyHashMatch !== false;
+            !options.forceRegenerate &&
+            (options.autoSync ||
+                LogseqProxy.Settings.getPluginSettings().skipOnDependencyHashMatch !== false);
         const result = await task.execute(
             toUpdateNotes,
             this.modelName,
-            this.graphName,
+            this.logseqLinkGraphName,
             graphPath,
             ankiNoteManager,
             syncNotificationObj,
@@ -249,6 +261,10 @@ export class LogseqToAnkiSync {
 
     private async getGraphName(): Promise<string> {
         return (await LogseqProxy.App.getCurrentGraph())?.name || "Default";
+    }
+
+    private async getLogseqLinkGraphName(): Promise<string> {
+        return await LogseqProxy.App.getCurrentGraphNameForLogseqLinks();
     }
 
     private getModelName(): string {
@@ -435,7 +451,7 @@ export class LogseqToAnkiSync {
         toUpdateNotes: Note[],
         toDeleteNotes: number[],
         ankiNoteManager: LazyAnkiNoteManager,
-        options: {autoSync: boolean; silentProgress: boolean; skippedDelete: number} = {
+        options: ExecuteSyncPlanOptions = {
             autoSync: false,
             silentProgress: false,
             skippedDelete: 0
@@ -471,7 +487,8 @@ export class LogseqToAnkiSync {
         );
         const updateResult = await this.measureSyncPhase("update notes", () =>
             this.updateNotes(toUpdateNotes, failedUpdated, ankiNoteManager, syncNotificationObj, {
-                autoSync: options.autoSync
+                autoSync: options.autoSync,
+                forceRegenerate: options.forceRegenerate
             })
         );
         const updatedNotes = updateResult.updated;

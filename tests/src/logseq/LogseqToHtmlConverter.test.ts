@@ -3,8 +3,15 @@ import type {PageEntity} from "@logseq/libs/dist/LSPlugin";
 import * as cheerio from "cheerio";
 import {afterEach, beforeEach, describe, expect, test} from "vitest";
 import getNameFromPage from "../../../src/logseq/getNameFromPage";
+import {LogseqAppInfoFetcher} from "../../../src/logseq/LogseqAppInfoFetcher";
 import {LogseqContentPreprocessor} from "../../../src/logseq/LogseqContentPreprocessor";
 import {LogseqToHtmlConverter} from "../../../src/logseq/LogseqToHtmlConverter";
+
+const getLogseqLinkGraphName = async () =>
+    LogseqAppInfoFetcher.getGraphNameForLogseqLinks(
+        await logseq.App.getCurrentGraph(),
+        globalThis.isLogseqCurrentIsDBGraph
+    );
 
 describe("Basic Markdown Cases", () => {
     describe("Basic Inline rendering", () => {
@@ -121,7 +128,7 @@ describe("Basic Markdown Cases", () => {
                 "Hello [[Ref Test]]",
                 "markdown"
             );
-            const graphName = (await logseq.App.getCurrentGraph()).name;
+            const graphName = await getLogseqLinkGraphName();
             const normalized = htmlFile.html
                 .trim()
                 .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -145,7 +152,7 @@ describe("Basic Markdown Cases", () => {
                     "[[Ref Test]][[Ref Test]] [[Ref Test]],[[Ref Test]]",
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -189,7 +196,7 @@ describe("Basic Markdown Cases", () => {
                 "markdown",
                 {displayTags: true}
             );
-            const graphName = (await logseq.App.getCurrentGraph()).name;
+            const graphName = await getLogseqLinkGraphName();
             const normalized = htmlFile.html
                 .trim()
                 .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -548,7 +555,7 @@ describe("E2E cases for non DB mode", () => {
                     block.content,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -581,7 +588,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Ref: ((${block.uuid}))`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -606,7 +613,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Ref: [Renamed Block](((${block.uuid})))`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -645,7 +652,7 @@ describe("E2E cases for non DB mode", () => {
                     "Page Ref: [[Test Ref Page]]",
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -670,7 +677,7 @@ describe("E2E cases for non DB mode", () => {
                     `Page Ref: [Renamed Page]([[${getNameFromPage(refPage)}]])`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -696,7 +703,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Embed: {{embed ((${block.uuid}))}}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -725,7 +732,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Embed: {{embed ((${block2.uuid}))}}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block1.uuid, "g"), "LAS-TEST-UUID-1")
@@ -755,7 +762,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Embed: {{embed ((${block2.uuid}))}}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block1.uuid, "g"), "LAS-TEST-UUID-1")
@@ -782,7 +789,7 @@ describe("E2E cases for non DB mode", () => {
                     `Block Embed: {{embed ((${block.uuid}))}}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -824,7 +831,7 @@ describe("E2E cases for non DB mode", () => {
                     "Page Embed: {{embed [[Test Embed Page]]}}",
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(embedPage.uuid, "g"), "LAS-TEST-UUID")
@@ -882,7 +889,7 @@ describe("Page + Block Embed Rendering", () => {
                 blockB.content,
                 "markdown"
             );
-            const graphName = (await logseq.App.getCurrentGraph()).name;
+            const graphName = await getLogseqLinkGraphName();
             const normalized = htmlFile.html
                 .trim()
                 .replace(new RegExp(blockA.uuid, "g"), "LAS-TEST-UUID")
@@ -923,7 +930,7 @@ describe("E2E cases for DB mode", () => {
                     `Block Ref: [[${block.uuid}]]`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")
@@ -951,7 +958,7 @@ describe("E2E cases for DB mode", () => {
                     "Page Ref: [[Test DB Ref Page]]",
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(graphName, "g"), "LAS-TEST-GRAPH");
@@ -978,7 +985,7 @@ describe("E2E cases for DB mode", () => {
                     `uuid:: ${embedBlockUuid}\nlink:: ${block.id}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID-1")
@@ -1010,7 +1017,7 @@ describe("E2E cases for DB mode", () => {
                     `uuid:: ${embedBlockUuid}\nlink:: ${embedPage.id}`,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(embedPage.uuid, "g"), "LAS-TEST-UUID-1")
@@ -1057,7 +1064,7 @@ describe("E2E cases for DB mode", () => {
                     block.content,
                     "markdown"
                 );
-                const graphName = (await logseq.App.getCurrentGraph()).name;
+                const graphName = await getLogseqLinkGraphName();
                 const normalized = htmlFile.html
                     .trim()
                     .replace(new RegExp(block.uuid, "g"), "LAS-TEST-UUID")

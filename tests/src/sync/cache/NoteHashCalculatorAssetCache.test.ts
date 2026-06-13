@@ -31,6 +31,9 @@ vi.mock("../../../../src/logseq/LogseqProxy", () => ({
             getPluginSettings: vi.fn(() => ({
                 includeParentContent: false
             }))
+        },
+        App: {
+            getCurrentGraphNameForLogseqLinks: vi.fn(async () => "Graph")
         }
     }
 }));

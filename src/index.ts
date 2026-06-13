@@ -31,8 +31,12 @@ async function main(baseInfo: LSPluginBaseInfo) {
     const syncLogseqToAnki = async () => {
         await new LogseqToAnkiSync().sync();
     };
+    const forceRegenerateLogseqToAnki = async () => {
+        await new LogseqToAnkiSync().sync({forceRegenerate: true});
+    };
     logseq.provideModel({
-        syncLogseqToAnki: syncLogseqToAnki
+        syncLogseqToAnki,
+        forceRegenerateLogseqToAnki
     });
     logseq.App.registerCommandPalette(
         {
@@ -41,6 +45,14 @@ async function main(baseInfo: LSPluginBaseInfo) {
             keybinding: {mode: "global", binding: ""}
         },
         syncLogseqToAnki
+    );
+    logseq.App.registerCommandPalette(
+        {
+            key: `logseq-anki-force-regenerate-command-palette-${baseInfo.id}`,
+            label: `Force Regenerate All Anki Cards`,
+            keybinding: {mode: "global", binding: ""}
+        },
+        forceRegenerateLogseqToAnki
     );
     registerToolbar(baseInfo);
     updateLoggerLevels();

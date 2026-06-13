@@ -10,30 +10,45 @@ import {LogseqProxy} from "../../logseq/LogseqProxy";
 const logger = createLogger(LoggerCategory.SyncInternal);
 
 export class BreadcrumbAndParentBlockParser {
-    static async parse(note: Note, graphName: string, tags: Set<string>): Promise<string> {
+    static async parse(
+        note: Note,
+        logseqLinkGraphName: string,
+        tags: Set<string>
+    ): Promise<string> {
         const {breadcrumbDisplayOptions} = LogseqProxy.Settings.getPluginSettings();
         const options = breadcrumbDisplayOptions || [];
 
         // If no breadcrumb options selected, return hidden breadcrumb
         if (options.length === 0 || !options.includes("Page name")) {
-            return await BreadcrumbAndParentBlockParser.buildHiddenBreadcrumb(note, graphName);
+            return await BreadcrumbAndParentBlockParser.buildHiddenBreadcrumb(
+                note,
+                logseqLinkGraphName
+            );
         }
 
         // Build breadcrumb based on selected options
-        return await BreadcrumbAndParentBlockParser.buildBreadcrumb(note, graphName, options, tags);
+        return await BreadcrumbAndParentBlockParser.buildBreadcrumb(
+            note,
+            logseqLinkGraphName,
+            options,
+            tags
+        );
     }
 
-    private static async buildHiddenBreadcrumb(note: Note, graphName: string): Promise<string> {
+    private static async buildHiddenBreadcrumb(
+        note: Note,
+        logseqLinkGraphName: string
+    ): Promise<string> {
         const page = await LogseqProxy.Editor.getPage(note.pageId);
         const pageName = getNameFromPage(page);
-        return `<a href="logseq://graph/${encodeURIComponent(graphName)}?page=${encodeURIComponent(
+        return `<a href="logseq://graph/${encodeURIComponent(logseqLinkGraphName)}?page=${encodeURIComponent(
             pageName
         )}" class="hidden">${pageName}</a>`;
     }
 
     private static async buildBreadcrumb(
         note: Note,
-        graphName: string,
+        logseqLinkGraphName: string,
         options: string[],
         tags: Set<string>
     ): Promise<string> {
@@ -60,7 +75,7 @@ export class BreadcrumbAndParentBlockParser {
             fullPageName = displayName;
         }
 
-        let breadcrumb = `<a href="logseq://graph/${encodeURIComponent(graphName)}?page=${encodeURIComponent(
+        let breadcrumb = `<a href="logseq://graph/${encodeURIComponent(logseqLinkGraphName)}?page=${encodeURIComponent(
             fullPageName
         )}" title="${displayName}">📄${displayName}</a>`;
 
@@ -74,7 +89,7 @@ export class BreadcrumbAndParentBlockParser {
                 for (const parentBlock of parentBlocks) {
                     const firstLine = parentBlock.content.split("\n")[0];
                     breadcrumb += ` > <a href="logseq://graph/${encodeURIComponent(
-                        graphName
+                        logseqLinkGraphName
                     )}?block-id=${encodeURIComponent(parentBlock.uuid)}" title="${
                         parentBlock.content
                     }">⚪${firstLine}</a>`;

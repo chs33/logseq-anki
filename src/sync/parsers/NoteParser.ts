@@ -5,7 +5,7 @@ import {DeckParser} from "./DeckParser";
 import {ParentContentParser} from "./ParentContentParser";
 import {TagParser} from "./TagParser";
 
-export async function parseNote(note: Note, graphName: string): Promise<ParsedNoteData> {
+export async function parseNote(note: Note, logseqLinkGraphName: string): Promise<ParsedNoteData> {
     let {html, assets, tags} = await note.getClozedContentHTML();
 
     const tagsSet = tags instanceof Set ? tags : new Set(tags);
@@ -15,7 +15,11 @@ export async function parseNote(note: Note, graphName: string): Promise<ParsedNo
 
     const deck = await DeckParser.parse(note);
 
-    const breadcrumb = await BreadcrumbAndParentBlockParser.parse(note, graphName, tagsSet);
+    const breadcrumb = await BreadcrumbAndParentBlockParser.parse(
+        note,
+        logseqLinkGraphName,
+        tagsSet
+    );
 
     const collectedTags = await TagParser.parse(note, Array.from(parentResult.tags));
 

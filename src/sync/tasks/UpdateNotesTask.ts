@@ -20,7 +20,7 @@ export class UpdateNotesTask {
     async execute(
         notes: Note[],
         modelName: string,
-        graphName: string,
+        logseqLinkGraphName: string,
         graphPath: string,
         ankiNoteManager: LazyAnkiNoteManager,
         progressNotification: ProgressNotification,
@@ -34,7 +34,7 @@ export class UpdateNotesTask {
                 const outcome = await this.updateNote(
                     note,
                     modelName,
-                    graphName,
+                    logseqLinkGraphName,
                     graphPath,
                     ankiNoteManager,
                     options
@@ -65,7 +65,7 @@ export class UpdateNotesTask {
     private async updateNote(
         note: Note,
         modelName: string,
-        graphName: string,
+        logseqLinkGraphName: string,
         graphPath: string,
         ankiNoteManager: LazyAnkiNoteManager,
         options: UpdateNotesTaskOptions
@@ -107,7 +107,7 @@ export class UpdateNotesTask {
             ankiNoteManager.storeAsset(name, url);
         }
 
-        const [html, assets, deck, breadcrumb, tags] = await parseNote(note, graphName);
+        const [html, assets, deck, breadcrumb, tags] = await parseNote(note, logseqLinkGraphName);
         const updatedDependencyHash = await NoteHashCalculator.getHash(note, [
             html,
             assets,

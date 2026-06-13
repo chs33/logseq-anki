@@ -30,6 +30,8 @@ When an existing note's stored dependency hash still matches the current Logseq 
 
 Sync still scans eligible Logseq cards each run so it can detect new cards, changed cards, and stale Anki notes. Manual sync can still show update candidates before the hash skip is applied, but only notes with real changes are sent through the Anki update operation.
 
+Use **Force Regenerate All Anki Cards** from the command palette, or **Force Regenerate All** from the plugin toolbar menu, when you need to rerender every selected existing card even if its dependency hash still matches. This is useful after renderer, template, or Logseq link behavior changes where the stored hash may otherwise prevent an unchanged card from being sent to Anki.
+
 ## AnkiConnect Port
 
 By default, the plugin connects to AnkiConnect at `127.0.0.1:8765`.

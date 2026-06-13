@@ -298,6 +298,14 @@ export namespace LogseqProxy {
             return await logseq.App.getCurrentGraph();
         });
 
+        static getCurrentGraphNameForLogseqLinks = pMemoize(async () => {
+            const [graph, isDbGraph] = await Promise.all([
+                App.getCurrentGraph(),
+                App.checkCurrentIsDbGraph()
+            ]);
+            return LogseqAppInfoFetcher.getGraphNameForLogseqLinks(graph, isDbGraph);
+        });
+
         static registeredGraphChangeListeners: Array<(e: any) => void> = [];
         static registerGraphChangeListener(listener: (e: any) => void): void {
             App.registeredGraphChangeListeners.push(listener);
@@ -331,7 +339,7 @@ export namespace LogseqProxy {
         });
         WindowParentBridge.addEventListener("syncLogseqToAnkiComplete", () => {
             logger.info(
-                "Clearing memoization caches for getBlock, getPage, getPageBlocksTree, namespace helpers, listFilesOfCurrentGraph, and checkCurrentIsDbGraph"
+                "Clearing memoization caches for getBlock, getPage, getPageBlocksTree, namespace helpers, listFilesOfCurrentGraph, getCurrentGraph, and checkCurrentIsDbGraph"
             );
             pMemoizeClear(LogseqProxy.Editor.getBlock);
             pMemoizeClear(LogseqProxy.Editor.getPage);
@@ -341,6 +349,7 @@ export namespace LogseqProxy {
             pMemoizeClear(LogseqProxy.Assets.listFilesOfCurrentGraph);
             pMemoizeClear(LogseqProxy.App.checkCurrentIsDbGraph);
             pMemoizeClear(LogseqProxy.App.getCurrentGraph);
+            pMemoizeClear(LogseqProxy.App.getCurrentGraphNameForLogseqLinks);
         });
     }
 }

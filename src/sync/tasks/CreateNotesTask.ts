@@ -15,8 +15,8 @@ export class CreateNotesTask {
     async execute(
         notes: Note[],
         modelName: string,
-        graphName: string,
-        graphPath: string,
+        logseqLinkGraphName: string,
+        _graphPath: string,
         ankiNoteManager: LazyAnkiNoteManager,
         progressNotification: ProgressNotification
     ): Promise<{succeeded: Note[]; failed: {[key: string]: Error}}> {
@@ -24,7 +24,7 @@ export class CreateNotesTask {
 
         for (const note of notes) {
             try {
-                await this.createNote(note, modelName, graphName, graphPath, ankiNoteManager);
+                await this.createNote(note, modelName, logseqLinkGraphName, ankiNoteManager);
             } catch (e) {
                 logger.error("Failed to create note", e);
                 failedCreated[`${note.uuid}-${note.type}`] = e;
@@ -61,11 +61,10 @@ export class CreateNotesTask {
     private async createNote(
         note: Note,
         modelName: string,
-        graphName: string,
-        graphPath: string,
+        logseqLinkGraphName: string,
         ankiNoteManager: LazyAnkiNoteManager
     ): Promise<void> {
-        const [html, assets, deck, breadcrumb, tags] = await parseNote(note, graphName);
+        const [html, assets, deck, breadcrumb, tags] = await parseNote(note, logseqLinkGraphName);
         const dependencyHash = await NoteHashCalculator.getHash(note, [
             html,
             assets,

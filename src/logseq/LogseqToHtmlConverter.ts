@@ -81,7 +81,9 @@ export class LogseqToHtmlConverter {
         opts: {processRefEmbeds?: boolean; displayTags?: boolean} = {
             processRefEmbeds: true,
             displayTags: false
-        }
+        },
+        getCurrentGraphNameForLogseqLinks: () => Promise<string> = () =>
+            LogseqToHtmlConverter.getCurrentGraphNameForLogseqLinks()
     ): Promise<HTMLFile> {
         let resultContent = content.trim(),
             resultAssets = new Set<string>(),
@@ -197,6 +199,14 @@ export class LogseqToHtmlConverter {
         resultContent = new TextDecoder().decode(resultUTF8);
         logger.info("After replacing erroneous terms", {contentLength: resultContent.length});
 
+        let logseqLinkGraphName: string | null = null;
+        const getLogseqLinkGraphName = async () => {
+            if (logseqLinkGraphName == null) {
+                logseqLinkGraphName = await getCurrentGraphNameForLogseqLinks();
+            }
+            return logseqLinkGraphName;
+        };
+
         // Process the block & page refs + embeds
         if (opts.processRefEmbeds)
             resultContent = await LogseqToHtmlConverter.processRefEmbeds(
@@ -204,6 +214,7 @@ export class LogseqToHtmlConverter {
                 resultAssets,
                 resultTags,
                 hashmap,
+                getLogseqLinkGraphName,
                 format
             );
         else
@@ -255,7 +266,7 @@ export class LogseqToHtmlConverter {
 
         const $tagElems = $("a.tag");
         if ($tagElems.length > 0) {
-            const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+            const graphName = await getLogseqLinkGraphName();
             $tagElems.each((i, elm) => {
                 let tagName = $(elm).text(),
                     afterText = "";
@@ -312,6 +323,7 @@ export class LogseqToHtmlConverter {
         resultAssets: Set<string>,
         resultTags: Set<string>,
         hashmap: Record<string, string>,
+        getLogseqLinkGraphName: () => Promise<string>,
         format: string
     ): Promise<string> {
         let block;
@@ -404,7 +416,7 @@ export class LogseqToHtmlConverter {
                 }
 
                 const str = getRandomUnicodeString();
-                const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+                const graphName = await getLogseqLinkGraphName();
                 hashmap[str] =
                     `<div class="embed-page"><a href="logseq://graph/${encodeURIComponent(graphName)}?page=${encodeURIComponent(pageName)}" class="embed-header">${pageName}</a>${await getPageContentHTML(pageTree)}</div>`;
                 return str;
@@ -418,7 +430,7 @@ export class LogseqToHtmlConverter {
                 const pageId = safeParseInt(pageIdStr);
                 const pageName = await LogseqToHtmlConverter.getPageNameFromID(pageId);
                 const str = getRandomUnicodeString();
-                const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+                const graphName = await getLogseqLinkGraphName();
                 hashmap[str] =
                     `<a href="logseq://graph/${encodeURIComponent(graphName)}?page=${encodeURIComponent(pageName)}" class="page-reference">${aliasContent}</a>`;
                 return str;
@@ -430,7 +442,7 @@ export class LogseqToHtmlConverter {
             LOGSEQ_PAGE_REF_REGEXP,
             async (match, pageIdStr: string) => {
                 const str = getRandomUnicodeString();
-                const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+                const graphName = await getLogseqLinkGraphName();
 
                 // Handle as page reference
                 const pageId = safeParseInt(pageIdStr);
@@ -446,7 +458,7 @@ export class LogseqToHtmlConverter {
             LOGSEQ_RENAMED_BLOCK_REF_REGEXP,
             async (match, aliasContent, blockUUID) => {
                 const str = getRandomUnicodeString();
-                const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+                const graphName = await getLogseqLinkGraphName();
                 hashmap[str] =
                     `<a href="logseq://graph/${encodeURIComponent(graphName)}?block-id=${encodeURIComponent(blockUUID)}" class="block-ref">${aliasContent}</a>`;
                 return str;
@@ -482,7 +494,7 @@ export class LogseqToHtmlConverter {
                     blockRefHTMLFile.assets.forEach((element) => {
                         resultAssets.add(element);
                     });
-                    const graphName = (await LogseqToHtmlConverter.getCurrentGraph())?.name;
+                    const graphName = await getLogseqLinkGraphName();
                     hashmap[str] =
                         `<span onclick="window.open('logseq://graph/${encodeURIComponent(graphName)}?block-id=${encodeURIComponent(blockUUID)}')" class="block-ref">${blockRefHTMLFile.html}</span>`;
                 } catch (e) {
@@ -797,6 +809,14 @@ export class LogseqToHtmlConverter {
         return await logseq.App.getCurrentGraph();
     }
 
+    protected static async getCurrentGraphNameForLogseqLinks() {
+        const [graph, isDbGraph] = await Promise.all([
+            LogseqToHtmlConverter.getCurrentGraph(),
+            LogseqAppInfoFetcher.checkCurrentIsDbGraph()
+        ]);
+        return LogseqAppInfoFetcher.getGraphNameForLogseqLinks(graph, isDbGraph);
+    }
+
     protected static async getBlock(srcBlock: string, opts?: any) {
         return await LogseqPropertiesHelper.getBlock(srcBlock, opts);
     }
@@ -828,6 +848,10 @@ export class LogseqToHtmlConverterProxy extends LogseqToHtmlConverter {
 
     protected static async getCurrentGraph() {
         return await LogseqProxy.App.getCurrentGraph();
+    }
+
+    protected static async getCurrentGraphNameForLogseqLinks() {
+        return await LogseqProxy.App.getCurrentGraphNameForLogseqLinks();
     }
 
     protected static async getBlock(srcBlock: string, opts?: any) {
@@ -862,7 +886,8 @@ export class LogseqToHtmlConverterProxy extends LogseqToHtmlConverter {
                 LogseqToHtmlConverterProxy,
                 content,
                 format,
-                opts
+                opts,
+                () => LogseqProxy.App.getCurrentGraphNameForLogseqLinks()
             );
         },
         {cacheKey: (args) => objectHashOptimized(args)}

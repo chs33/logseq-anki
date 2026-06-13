@@ -104,6 +104,9 @@ export default class NoteHashCalculator {
         // Include Logseq Page Id in hash calculation
         toHash.push(note.pageId);
 
+        // Graph deep links are rendered into Anki fields and must invalidate stale card URLs.
+        toHash.push(await LogseqProxy.App.getCurrentGraphNameForLogseqLinks());
+
         const settings = LogseqProxy.Settings.getPluginSettings();
         toHash.push(
             _.omit(settings, [
