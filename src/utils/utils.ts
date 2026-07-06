@@ -50,7 +50,6 @@ export function string_to_arr(str: string): any {
     const matchResult = OhmStrToListGrammar.match(str);
     if (matchResult.failed()) {
         throw "Cannot parse array list from string";
-        return r;
     }
 
     // Define and assciate semantic actions with grammar
@@ -133,22 +132,18 @@ export function handleAnkiError(msg: string): void {
                             )
                     }
                 ],
-                "Please ensure Anki is open in background with AnkiConnect installed properly. Read installation guide for details.",
+                getReadableAnkiErrorMessage(msg),
                 5000,
                 `<span class="text-warning">${WARNING_ICON}</span>`
             );
             break;
         case "Permission to access anki was denied":
-            logseq.UI.showMsg(
-                "Please give permission to access anki by clicking yes when prompted.",
-                "warning",
-                {
-                    timeout: 5000
-                }
-            );
+            logseq.UI.showMsg(getReadableAnkiErrorMessage(msg), "warning", {
+                timeout: 5000
+            });
             break;
         case "collection is not available":
-            logseq.UI.showMsg("Please select an anki profile before syncing.", "warning", {
+            logseq.UI.showMsg(getReadableAnkiErrorMessage(msg), "warning", {
                 timeout: 5000
             });
             break;
@@ -157,6 +152,28 @@ export function handleAnkiError(msg: string): void {
                 timeout: 5000
             });
             break;
+    }
+}
+
+export function isAnkiConnectUnavailableError(msg: string): boolean {
+    return msg === "failed to issue request";
+}
+
+export function getReadableAnkiErrorMessage(
+    msg: string,
+    options: {ankiConnectUrl?: string} = {}
+): string {
+    switch (msg) {
+        case "failed to issue request":
+            return `Anki is not reachable${
+                options.ankiConnectUrl ? ` at ${options.ankiConnectUrl}` : ""
+            }. Open Anki with AnkiConnect installed, or update the AnkiConnect port setting.`;
+        case "Permission to access anki was denied":
+            return "Please give permission to access Anki by clicking yes when prompted.";
+        case "collection is not available":
+            return "Please select an Anki profile before syncing.";
+        default:
+            return msg;
     }
 }
 
@@ -187,8 +204,8 @@ export function getRandomUnicodeString(length?: number): string {
 }
 
 export function getFirstNonEmptyLine(str: string): string {
-    let start = 0,
-        end;
+    let start = 0;
+    let end = 0;
     let current_line_empty = true;
     for (end = 0; end < str.length; end++) {
         if (str[end] !== " " && str[end] !== "\t" && str[end] !== "\n") current_line_empty = false;

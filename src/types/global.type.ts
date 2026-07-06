@@ -6,6 +6,7 @@ declare global {
         LogseqAnkiSync: any;
         fabric: any;
         lastSyncLogseqToAnkiResult: SyncResult | null;
+        lastChangedSyncLogseqToAnkiResult: SyncResult | null;
         AnkiConnect: any;
     }
 }

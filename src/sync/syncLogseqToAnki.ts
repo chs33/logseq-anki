@@ -27,7 +27,12 @@ import {
     showSyncSelectionDialog
 } from "../ui";
 import {ActionNotification} from "../ui/notifications/ActionNotification";
-import {handleAnkiError, sortAsync} from "../utils/utils";
+import {
+    getReadableAnkiErrorMessage,
+    handleAnkiError,
+    isAnkiConnectUnavailableError,
+    sortAsync
+} from "../utils/utils";
 import {NoteHashCalculator} from "./cache";
 import {CreateNotesTask} from "./tasks/CreateNotesTask";
 import {DeleteNotesTask} from "./tasks/DeleteNotesTask";
@@ -89,9 +94,25 @@ export class LogseqToAnkiSync {
         } catch (e) {
             const errorMessage = e?.toString?.() ?? String(e);
             if (syncOptions.mode === "auto") {
-                logseq.UI.showMsg(`Auto sync failed: ${errorMessage}`, "error", {
-                    timeout: 8000
+                const readableErrorMessage = getReadableAnkiErrorMessage(errorMessage, {
+                    ankiConnectUrl: AnkiConnect.getAnkiConnectUrl()
                 });
+                const ankiConnectUnavailable = isAnkiConnectUnavailableError(errorMessage);
+                logseq.UI.showMsg(
+                    `Auto sync ${ankiConnectUnavailable ? "skipped" : "failed"}: ${readableErrorMessage}`,
+                    ankiConnectUnavailable ? "warning" : "error",
+                    {
+                        timeout: 8000
+                    }
+                );
+                logseq.provideUI({
+                    key: `logseq-anki-sync-progress-notification-${logseq.baseInfo.id}`,
+                    template: ``
+                });
+                if (ankiConnectUnavailable) {
+                    logger.warn("Auto sync skipped because AnkiConnect is unavailable", e);
+                    return {status: "skipped", changed: false};
+                }
             } else {
                 handleAnkiError(errorMessage);
             }
@@ -134,7 +155,11 @@ export class LogseqToAnkiSync {
         const {toCreateNotesOriginal, toUpdateNotesOriginal, toDeleteNotesOriginal} = syncPlan;
 
         const confirmation = isAutoSync
-            ? this.getAutoSelection(toCreateNotesOriginal, toUpdateNotesOriginal)
+            ? this.getAutoSelection(
+                  toCreateNotesOriginal,
+                  toUpdateNotesOriginal,
+                  toDeleteNotesOriginal
+              )
             : await this.getUserConfirmation(
                   toCreateNotesOriginal,
                   toUpdateNotesOriginal,
@@ -153,7 +178,7 @@ export class LogseqToAnkiSync {
             {
                 autoSync: isAutoSync,
                 silentProgress: isAutoSync,
-                skippedDelete: isAutoSync ? toDeleteNotesOriginal.length : 0,
+                skippedDelete: 0,
                 ...(options.forceRegenerate === true ? {forceRegenerate: true} : {})
             }
         );
@@ -164,6 +189,9 @@ export class LogseqToAnkiSync {
 
         WindowParentBridge.dispatchLogseqAnkiSyncEvent("syncLogseqToAnkiComplete");
         WindowParentBridge.setGlobalObject("lastSyncLogseqToAnkiResult", syncResult);
+        if (syncResult.changed) {
+            WindowParentBridge.setGlobalObject("lastChangedSyncLogseqToAnkiResult", syncResult);
+        }
         if (isAutoSync) {
             this.displayAutoResults(syncResult);
         } else {
@@ -435,15 +463,16 @@ export class LogseqToAnkiSync {
 
     private getAutoSelection(
         toCreateNotes: Note[],
-        toUpdateNotes: Note[]
+        toUpdateNotes: Note[],
+        toDeleteNotes: number[]
     ): {toCreateNotes: Note[]; toUpdateNotes: Note[]; toDeleteNotes: number[]} {
         logger.info("Auto sync plan created", {
             toCreate: toCreateNotes.length,
             toUpdate: toUpdateNotes.length,
-            toDelete: 0
+            toDelete: toDeleteNotes.length
         });
 
-        return {toCreateNotes, toUpdateNotes, toDeleteNotes: []};
+        return {toCreateNotes, toUpdateNotes, toDeleteNotes};
     }
 
     private async executeSyncPlan(

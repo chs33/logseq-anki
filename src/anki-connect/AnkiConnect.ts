@@ -63,7 +63,7 @@ export function invoke(action: string, params = {}): any {
         });
 
         xhr.open("POST", getAnkiConnectUrl());
-        xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+        // Avoid a CORS preflight from Logseq's WebView; AnkiConnect parses the JSON body directly.
         xhr.send(JSON.stringify({action, version: 6, params}));
     });
 }

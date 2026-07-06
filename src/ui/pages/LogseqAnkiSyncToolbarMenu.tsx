@@ -48,9 +48,12 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
         setTimeout(() => UI.hideModal(modalId), 150);
     };
 
-    const hasLastSync =
-        WindowParentBridge.getGlobalObject("lastSyncLogseqToAnkiResult") !== null &&
-        WindowParentBridge.getGlobalObject("lastSyncLogseqToAnkiResult") !== undefined;
+    const lastSyncResult = WindowParentBridge.getGlobalObject("lastSyncLogseqToAnkiResult");
+    const lastChangedSyncResult = WindowParentBridge.getGlobalObject(
+        "lastChangedSyncLogseqToAnkiResult"
+    );
+    const hasLastSync = lastSyncResult != null;
+    const hasLastChangedSync = lastChangedSyncResult != null;
 
     const rightPos = triggerRect ? (parentWidth || window.innerWidth) - triggerRect.right : 20;
     const topPos = triggerRect ? triggerRect.bottom + 8 : 40;
@@ -96,8 +99,16 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
             text: "Last Sync Details",
             disabled: !hasLastSync,
             onClick: () => {
-                const result = WindowParentBridge.getGlobalObject("lastSyncLogseqToAnkiResult");
-                if (result) showSyncResultDialog(result as any);
+                if (lastSyncResult) showSyncResultDialog(lastSyncResult as any);
+            }
+        },
+        {
+            key: "last-changed-sync-details",
+            icon: LOGS_ICON,
+            text: "Last Changed Sync Details",
+            disabled: !hasLastChangedSync,
+            onClick: () => {
+                if (lastChangedSyncResult) showSyncResultDialog(lastChangedSyncResult as any);
             }
         },
         {key: "separator-main", separator: true},

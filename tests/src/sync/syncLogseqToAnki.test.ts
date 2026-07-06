@@ -11,7 +11,8 @@ const progressNotificationMock = vi.hoisted(() =>
 const ankiConnectMock = vi.hoisted(() => ({
     invoke: vi.fn(),
     requestPermission: vi.fn(),
-    upsertModel: vi.fn()
+    upsertModel: vi.fn(),
+    getAnkiConnectUrl: vi.fn(() => "http://127.0.0.1:8765")
 }));
 
 const windowParentBridgeMock = vi.hoisted(() => ({
@@ -119,6 +120,13 @@ function getStoredLastSyncResult(): SyncResult | undefined {
     return call?.[1];
 }
 
+function getStoredLastChangedSyncResult(): SyncResult | undefined {
+    const call = windowParentBridgeMock.setGlobalObject.mock.calls.find(
+        ([key]) => key === "lastChangedSyncLogseqToAnkiResult"
+    );
+    return call?.[1];
+}
+
 describe("LogseqToAnkiSync modes", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -134,7 +142,7 @@ describe("LogseqToAnkiSync modes", () => {
         expect(sync.getUserConfirmation).not.toHaveBeenCalled();
     });
 
-    test("auto mode omits deletes and records skipped delete count", async () => {
+    test("auto mode includes deletes", async () => {
         const sync = buildSync(createSyncResult(false));
 
         await sync.sync({mode: "auto", triggerAnkiWebSync: false});
@@ -142,12 +150,12 @@ describe("LogseqToAnkiSync modes", () => {
         expect(sync.executeSyncPlan).toHaveBeenCalledWith(
             [createNote],
             [updateNote],
-            [],
+            [123],
             expect.anything(),
             {
                 autoSync: true,
                 silentProgress: true,
-                skippedDelete: 1
+                skippedDelete: 0
             }
         );
     });
@@ -216,6 +224,51 @@ describe("LogseqToAnkiSync modes", () => {
         expect(sync.displayAutoResults).toHaveBeenCalledWith(
             expect.objectContaining({changed: false, mode: "auto"})
         );
+        expect(getStoredLastChangedSyncResult()).toBeUndefined();
+    });
+
+    test("changed sync stores last changed sync details with duration metadata", async () => {
+        const sync = buildSync(createSyncResult(true));
+
+        const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+
+        expect(outcome.status).toBe("completed");
+        expectSyncTiming(outcome.result, "auto");
+        expectSyncTiming(getStoredLastSyncResult(), "auto");
+        expectSyncTiming(getStoredLastChangedSyncResult(), "auto");
+    });
+
+    test("auto mode skips when AnkiConnect is unreachable", async () => {
+        const originalLogseq = (globalThis as any).logseq;
+        const showMsg = vi.fn();
+        const provideUI = vi.fn();
+        const sync = buildSync(createSyncResult(false));
+        sync.setupAnkiModel = vi.fn().mockRejectedValue("failed to issue request");
+
+        vi.stubGlobal("logseq", {
+            ...originalLogseq,
+            UI: {
+                ...originalLogseq?.UI,
+                showMsg
+            },
+            provideUI,
+            baseInfo: {
+                id: "test-plugin"
+            }
+        });
+
+        try {
+            const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+
+            expect(outcome.status).toBe("skipped");
+            expect(showMsg).toHaveBeenCalledWith(
+                "Auto sync skipped: Anki is not reachable at http://127.0.0.1:8765. Open Anki with AnkiConnect installed, or update the AnkiConnect port setting.",
+                "warning",
+                {timeout: 8000}
+            );
+        } finally {
+            vi.stubGlobal("logseq", originalLogseq);
+        }
     });
 
     test("AnkiWeb sync runs after auto mode changes", async () => {
