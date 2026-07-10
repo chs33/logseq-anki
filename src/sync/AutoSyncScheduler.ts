@@ -28,7 +28,10 @@ export class AutoSyncScheduler {
     ) {}
 
     init(): void {
-        this.applySettings(LogseqProxy.Settings.getPluginSettings());
+        const startupSettings = this.disableAutoSyncOnStartup(
+            LogseqProxy.Settings.getPluginSettings()
+        );
+        this.applySettings(startupSettings);
         LogseqProxy.Settings.registerSettingsChangeListener((newSettings, oldSettings) => {
             if (this.didAutoSyncSettingsChange(newSettings, oldSettings)) {
                 this.configureFromSettings();
@@ -50,6 +53,13 @@ export class AutoSyncScheduler {
         }
 
         return Math.max(AutoSyncScheduler.MIN_INTERVAL_SECONDS, parsedIntervalSeconds);
+    }
+
+    private disableAutoSyncOnStartup(settings: PluginSettings): PluginSettings {
+        if (settings.autoSyncEnabled !== true) return settings;
+
+        LogseqProxy.Settings.updatePluginSettings({autoSyncEnabled: false});
+        return {...settings, autoSyncEnabled: false};
     }
 
     private static parseIntegerSetting(value: unknown): number | null {

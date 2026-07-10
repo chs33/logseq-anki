@@ -260,6 +260,10 @@ export namespace LogseqProxy {
         static getPluginSettings(): PluginSettings {
             return logseq.settings as PluginSettings;
         }
+
+        static updatePluginSettings(settings: Partial<PluginSettings>): void {
+            logseq.updateSettings(settings);
+        }
     }
     export class Assets {
         static listFilesOfCurrentGraph = pMemoize(

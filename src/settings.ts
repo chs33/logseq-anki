@@ -122,7 +122,7 @@ export const addSettingsToLogseq = async () => {
             default: false,
             title: "Enable auto sync? (Recommended: Disabled)",
             description:
-                "When enabled, the plugin will periodically look for Logseq notes eligible to create or update in Anki."
+                "When enabled, the plugin will periodically look for Logseq notes eligible to create or update in Anki. Auto sync is turned off again whenever the plugin starts."
         },
         {
             key: "autoSyncIntervalSeconds",

@@ -1,0 +1,45 @@
+name: Build plugin
+
+on:
+    push:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v6
+
+            - uses: pnpm/action-setup@v3
+              with:
+                  version: 10
+
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 20
+                  cache: "pnpm"
+                  cache-dependency-path: pnpm-lock.yaml
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build
+              run: pnpm run build
+
+            - name: Package plugin
+              run: |
+                  package_name="$(node -p "require('./package.json').name")"
+                  mkdir -p "release/${package_name}"
+                  cp README.md package.json icon.png "release/${package_name}/"
+                  cp -R dist "release/${package_name}/"
+
+            - name: Upload plugin artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: logseq-anki-sync-plugin
+                  path: release/logseq-anki-sync
+                  if-no-files-found: error

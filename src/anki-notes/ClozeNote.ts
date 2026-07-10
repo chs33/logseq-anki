@@ -99,6 +99,17 @@ export class ClozeNote extends Note {
             `);
         }
         const setupAnkiClozeObserverAndRenderThemInLogseqWhenObserved = () => {
+            const blockSelector = ".ls-block, [blockid], [data-block-id], [data-block-uuid]";
+
+            const getBlockElement = (element: Element): Element => {
+                return element.closest(blockSelector) || element;
+            };
+
+            const getQueryableAddedNode = (node: Node): ParentNode | null => {
+                if (node.nodeType === 1 || node.nodeType === 11) return node as ParentNode;
+                return null;
+            };
+
             // Set up observer for Anki Cloze Macro Syntax
             const getSourceLineBreaksAfterClozes = async (
                 blockElement: Element,
@@ -130,7 +141,7 @@ export class ClozeNote extends Note {
                 renderedCloze.after(WindowParentBridge.createElement("br"));
             };
 
-            const displayAnkiCloze = async (elem: Element) => {
+            const displayAnkiCloze = async (elem: ParentNode) => {
                 const firstCloze = elem.querySelector('span[title^="Unsupported macro name: c"]');
                 if (!firstCloze) return;
 
@@ -139,10 +150,7 @@ export class ClozeNote extends Note {
                     'span[title^="Unsupported macro name: c"]'
                 );
                 observedClozes.forEach((cloze) => {
-                    blockElements.add(
-                        cloze.closest(".ls-block, [blockid], [data-block-id], [data-block-uuid]") ||
-                            elem
-                    );
+                    blockElements.add(getBlockElement(cloze));
                 });
 
                 for (const blockElement of blockElements) {
@@ -187,10 +195,12 @@ export class ClozeNote extends Note {
             const observer = new MutationObserver((mutations) => {
                 if (mutations.length <= 8) {
                     for (const mutation of mutations) {
-                        const addedNode = mutation.addedNodes[0];
-                        if (addedNode?.childNodes.length) {
-                            void displayAnkiCloze(addedNode as Element);
-                        }
+                        mutation.addedNodes.forEach((addedNode) => {
+                            if (!addedNode.childNodes.length) return;
+                            const queryableNode = getQueryableAddedNode(addedNode);
+                            if (!queryableNode) return;
+                            void displayAnkiCloze(queryableNode);
+                        });
                     }
                 } else void displayAnkiCloze(WindowParentBridge.getBody() as Element);
             });

@@ -2,6 +2,7 @@ import {afterEach, beforeEach, describe, expect, test, vi} from "vitest";
 
 const testState = vi.hoisted(() => ({
     settings: {} as any,
+    settingsUpdates: [] as any[],
     settingsListeners: [] as Array<(newSettings: any, oldSettings: any) => void>,
     unloadListeners: [] as Array<() => void>,
     isSyncing: false
@@ -13,6 +14,10 @@ vi.mock("../../../src/logseq/LogseqProxy", () => ({
             getPluginSettings: vi.fn(() => testState.settings),
             registerSettingsChangeListener: vi.fn((listener) => {
                 testState.settingsListeners.push(listener);
+            }),
+            updatePluginSettings: vi.fn((settings) => {
+                testState.settingsUpdates.push(settings);
+                testState.settings = {...testState.settings, ...settings};
             })
         },
         App: {
@@ -39,6 +44,7 @@ describe("AutoSyncScheduler", () => {
     beforeEach(() => {
         vi.useFakeTimers();
         testState.settings = {};
+        testState.settingsUpdates = [];
         testState.settingsListeners = [];
         testState.unloadListeners = [];
         testState.isSyncing = false;
@@ -50,17 +56,44 @@ describe("AutoSyncScheduler", () => {
         vi.useRealTimers();
     });
 
+    const initScheduler = () => {
+        const scheduler = new AutoSyncScheduler(runner);
+        scheduler.init();
+        return scheduler;
+    };
+
+    const applySettingsChange = (settings: any) => {
+        const oldSettings = testState.settings;
+        const newSettings = {...testState.settings, ...settings};
+        testState.settings = newSettings;
+        testState.settingsListeners[0](newSettings, oldSettings);
+    };
+
+    const enableAutoSync = (autoSyncIntervalSeconds: number | string = 60) => {
+        applySettingsChange({autoSyncEnabled: true, autoSyncIntervalSeconds});
+    };
+
     test("is disabled by default", async () => {
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
 
         await vi.advanceTimersByTimeAsync(120_000);
 
         expect(runner).not.toHaveBeenCalled();
     });
 
-    test("starts when enabled", async () => {
+    test("turns persisted auto sync off on startup", async () => {
         testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 60};
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(testState.settingsUpdates).toEqual([{autoSyncEnabled: false}]);
+        expect(runner).not.toHaveBeenCalled();
+    });
+
+    test("starts when enabled", async () => {
+        initScheduler();
+        enableAutoSync(60);
 
         await vi.advanceTimersByTimeAsync(60_000);
 
@@ -72,8 +105,8 @@ describe("AutoSyncScheduler", () => {
     });
 
     test("clamps too-small intervals to 60 seconds", async () => {
-        testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 5};
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+        enableAutoSync(5);
 
         await vi.advanceTimersByTimeAsync(59_000);
         expect(runner).not.toHaveBeenCalled();
@@ -83,8 +116,8 @@ describe("AutoSyncScheduler", () => {
     });
 
     test("uses interval settings stored by Logseq as strings", async () => {
-        testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: "60"};
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+        enableAutoSync("60");
 
         await vi.advanceTimersByTimeAsync(60_000);
 
@@ -92,7 +125,6 @@ describe("AutoSyncScheduler", () => {
     });
 
     test("does not overlap runs", async () => {
-        testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 60};
         let resolveRun: (value: any) => void = () => {};
         runner.mockImplementation(
             () =>
@@ -100,7 +132,8 @@ describe("AutoSyncScheduler", () => {
                     resolveRun = resolve;
                 })
         );
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+        enableAutoSync(60);
 
         await vi.advanceTimersByTimeAsync(60_000);
         expect(runner).toHaveBeenCalledTimes(1);
@@ -117,14 +150,11 @@ describe("AutoSyncScheduler", () => {
     });
 
     test("reschedules when auto sync settings change", async () => {
-        const oldSettings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 120};
-        const newSettings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 60};
-        testState.settings = oldSettings;
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+        enableAutoSync(120);
 
         await vi.advanceTimersByTimeAsync(30_000);
-        testState.settings = newSettings;
-        testState.settingsListeners[0](newSettings, oldSettings);
+        applySettingsChange({autoSyncEnabled: true, autoSyncIntervalSeconds: 60});
 
         await vi.advanceTimersByTimeAsync(59_000);
         expect(runner).not.toHaveBeenCalled();
@@ -134,8 +164,8 @@ describe("AutoSyncScheduler", () => {
     });
 
     test("stops on unload", async () => {
-        testState.settings = {autoSyncEnabled: true, autoSyncIntervalSeconds: 60};
-        new AutoSyncScheduler(runner).init();
+        initScheduler();
+        enableAutoSync(60);
 
         testState.unloadListeners[0]();
         await vi.advanceTimersByTimeAsync(120_000);
