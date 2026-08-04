@@ -12,6 +12,135 @@ import {WindowParentBridge} from "../logseq/WindowParentBridge";
 import {escapeClozesAndMacroDelimiters, safeReplace, string_to_arr} from "../utils/utils";
 import {appendExtraToHtmlFile} from "./NoteUtils";
 
+export type LogseqPluginClozeSource = {
+    content: string;
+    lineBreakAfter: boolean;
+    lineBreakHasLeadingWhitespace: boolean;
+};
+
+export const shouldInsertSourceLineBreakAfterLogseqCloze = (
+    sourceCloze: LogseqPluginClozeSource | undefined,
+    renderClozeMarcosInLogseq: boolean
+): sourceCloze is LogseqPluginClozeSource => {
+    return Boolean(
+        sourceCloze?.lineBreakAfter &&
+            !(renderClozeMarcosInLogseq && sourceCloze.lineBreakHasLeadingWhitespace)
+    );
+};
+
+export const getLogseqPluginClozesFromContent = (
+    content: string,
+    clozeLimit?: number
+): LogseqPluginClozeSource[] => {
+    const clozes: LogseqPluginClozeSource[] = [];
+    const clozeRegexp = new RegExp(LOGSEQ_PLUGIN_CLOZE_REGEXP.source, "g");
+
+    for (const match of content.matchAll(clozeRegexp)) {
+        const matchIndex = match.index ?? 0;
+        const contentAfterCloze = content.slice(matchIndex + match[0].length);
+        const lineBreakMatch = contentAfterCloze.match(/^([ \t]*)\r?\n/);
+        clozes.push({
+            content: match[2] ?? "",
+            lineBreakAfter: Boolean(lineBreakMatch),
+            lineBreakHasLeadingWhitespace: Boolean(lineBreakMatch?.[1])
+        });
+        if (clozeLimit != null && clozes.length >= clozeLimit) break;
+    }
+
+    return clozes;
+};
+
+export const getInlineHTMLForLogseqRenderedCloze = (html: string): string => {
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+
+    const meaningfulNodes = Array.from(template.content.childNodes).filter(
+        (node) => node.nodeType !== Node.TEXT_NODE || node.textContent?.trim()
+    );
+
+    if (meaningfulNodes.length !== 1) return html;
+
+    const onlyNode = meaningfulNodes[0];
+    if (onlyNode.nodeType !== Node.ELEMENT_NODE) return html;
+
+    const onlyElement = onlyNode as HTMLElement;
+    if (onlyElement.tagName === "P") return onlyElement.innerHTML;
+    if (onlyElement.tagName === "SPAN" && onlyElement.attributes.length === 0) {
+        return onlyElement.innerHTML;
+    }
+    return html;
+};
+
+const getNextMeaningfulSibling = (node: ChildNode): ChildNode | null => {
+    let nextSibling = node.nextSibling;
+    while (nextSibling?.nodeType === Node.TEXT_NODE && nextSibling.textContent?.trim() === "") {
+        nextSibling = nextSibling.nextSibling;
+    }
+
+    return nextSibling;
+};
+
+const getExistingLineBreakAfter = (node: ChildNode): ChildNode | null => {
+    let nextSibling = node.nextSibling;
+    let newlineTextNode: ChildNode | null = null;
+
+    while (nextSibling?.nodeType === Node.TEXT_NODE) {
+        const textContent = nextSibling.textContent ?? "";
+        if (/\r?\n/.test(textContent)) newlineTextNode = nextSibling;
+        if (textContent.trim() !== "") return null;
+        nextSibling = nextSibling.nextSibling;
+    }
+
+    if ((nextSibling as Element | null)?.tagName === "BR") return nextSibling;
+    return newlineTextNode;
+};
+
+const removeDuplicateLineBreaksAfter = (lineBreak: ChildNode) => {
+    let nextSibling = getNextMeaningfulSibling(lineBreak);
+
+    while ((nextSibling as Element | null)?.tagName === "BR") {
+        const duplicateLineBreak = nextSibling;
+        nextSibling = getNextMeaningfulSibling(duplicateLineBreak);
+        duplicateLineBreak.remove();
+    }
+};
+
+export const getLogseqClozeLineBreakAnchor = (renderedCloze: HTMLElement): HTMLElement => {
+    const macroParent = renderedCloze.parentElement;
+    return macroParent?.classList.contains("macro") ? macroParent : renderedCloze;
+};
+
+const getLogseqClozeLineBreakSearchAnchors = (renderedCloze: HTMLElement): HTMLElement[] => {
+    const anchors = [renderedCloze];
+    let currentElement = renderedCloze.parentElement;
+
+    while (
+        currentElement &&
+        !currentElement.matches(".block-content, .block-content-inner, .ls-block")
+    ) {
+        anchors.push(currentElement);
+        currentElement = currentElement.parentElement;
+    }
+
+    return anchors;
+};
+
+export const insertLineBreakAfterLogseqCloze = (
+    renderedCloze: HTMLElement,
+    createLineBreak: () => HTMLBRElement = () => document.createElement("br")
+) => {
+    const lineBreakAnchor = getLogseqClozeLineBreakAnchor(renderedCloze);
+    for (const anchor of getLogseqClozeLineBreakSearchAnchors(renderedCloze)) {
+        const existingLineBreak = getExistingLineBreakAfter(anchor);
+        if (existingLineBreak) {
+            removeDuplicateLineBreaksAfter(existingLineBreak);
+            return;
+        }
+    }
+
+    lineBreakAnchor.after(createLineBreak());
+};
+
 export class ClozeNote extends Note {
     public type = "cloze";
 
@@ -47,7 +176,8 @@ export class ClozeNote extends Note {
                 });
             }
         });
-        const {hideClozeMarcosUntilHoverInLogseq} = LogseqProxy.Settings.getPluginSettings();
+        const {hideClozeMarcosUntilHoverInLogseq, renderClozeMarcosInLogseq} =
+            LogseqProxy.Settings.getPluginSettings();
         logseq.provideStyle(`
             span[title="Unsupported macro name: c1"],
             span[title="Unsupported macro name: c2"],
@@ -69,15 +199,18 @@ export class ClozeNote extends Note {
             span[title="Unsupported macro name: cloze9"] {
                 visibility: hidden !important;
             }
-            .logseq-anki-cloze-block {
-                white-space: pre-wrap;
-            }
             .anki-cloze {
                 background: unset;
                 color: inherit;
-                white-space: pre-wrap;
             }
         `);
+        if (!renderClozeMarcosInLogseq) {
+            logseq.provideStyle(`
+                .anki-cloze {
+                    white-space: pre-wrap;
+                }
+            `);
+        }
         if (hideClozeMarcosUntilHoverInLogseq) {
             logseq.provideStyle(`
                 .anki-cloze {
@@ -99,10 +232,44 @@ export class ClozeNote extends Note {
             `);
         }
         const setupAnkiClozeObserverAndRenderThemInLogseqWhenObserved = () => {
-            const blockSelector = ".ls-block, [blockid], [data-block-id], [data-block-uuid]";
+            const blockUUIDAttributes = [
+                "blockid",
+                "data-block-id",
+                "data-block-uuid",
+                "data-uuid"
+            ];
+            const blockUUIDSelector = blockUUIDAttributes.map((attr) => `[${attr}]`).join(", ");
+            const blockSelector = [".ls-block", blockUUIDSelector].join(", ");
 
             const getBlockElement = (element: Element): Element => {
-                return element.closest(blockSelector) || element;
+                return element.closest(".ls-block") || element.closest(blockSelector) || element;
+            };
+
+            const getBlockUUIDFromAttributes = (element: Element | null): string | null => {
+                if (!element) return null;
+
+                for (const attribute of blockUUIDAttributes) {
+                    const value = element.getAttribute(attribute);
+                    if (value) return value;
+                }
+
+                return null;
+            };
+
+            const getBlockUUIDFromElement = (element: Element): string | null => {
+                const blockUUID =
+                    getBlockUUIDFromAttributes(element) ||
+                    getBlockUUIDFromAttributes(element.querySelector(blockUUIDSelector));
+                if (blockUUID) return blockUUID;
+
+                let currentElement = element.parentElement;
+                while (currentElement) {
+                    const parentBlockUUID = getBlockUUIDFromAttributes(currentElement);
+                    if (parentBlockUUID) return parentBlockUUID;
+                    currentElement = currentElement.parentElement;
+                }
+
+                return null;
             };
 
             const getQueryableAddedNode = (node: Node): ParentNode | null => {
@@ -110,35 +277,18 @@ export class ClozeNote extends Note {
                 return null;
             };
 
-            // Set up observer for Anki Cloze Macro Syntax
-            const getSourceLineBreaksAfterClozes = async (
+            const getSourceClozesFromBlock = async (
                 blockElement: Element,
                 clozeCount: number
-            ): Promise<boolean[]> => {
-                const blockUUID =
-                    blockElement.getAttribute("blockid") ||
-                    blockElement.getAttribute("data-block-id") ||
-                    blockElement.getAttribute("data-block-uuid") ||
-                    blockElement.getAttribute("data-uuid");
+            ): Promise<LogseqPluginClozeSource[]> => {
+                const blockUUID = getBlockUUIDFromElement(blockElement);
                 if (!blockUUID) return [];
 
                 const block = await LogseqPropertiesHelper.getBlock(blockUUID);
-                if (!block?.content) return [];
+                const sourceContent = (block as {title?: string} | null)?.title || block?.content;
+                if (!sourceContent) return [];
 
-                const lineBreaksAfterClozes: boolean[] = [];
-                const clozeRegexp = new RegExp(LOGSEQ_PLUGIN_CLOZE_REGEXP.source, "g");
-                for (const match of block.content.matchAll(clozeRegexp)) {
-                    const matchIndex = match.index ?? 0;
-                    const contentAfterCloze = block.content.slice(matchIndex + match[0].length);
-                    lineBreaksAfterClozes.push(/^[ \t]*\r?\n/.test(contentAfterCloze));
-                    if (lineBreaksAfterClozes.length >= clozeCount) break;
-                }
-                return lineBreaksAfterClozes;
-            };
-
-            const insertLineBreakAfterCloze = (renderedCloze: HTMLElement) => {
-                if ((renderedCloze.nextSibling as Element | null)?.tagName === "BR") return;
-                renderedCloze.after(WindowParentBridge.createElement("br"));
+                return getLogseqPluginClozesFromContent(sourceContent, clozeCount);
             };
 
             const displayAnkiCloze = async (elem: ParentNode) => {
@@ -157,36 +307,48 @@ export class ClozeNote extends Note {
                     const clozes = Array.from(
                         blockElement.querySelectorAll('span[title^="Unsupported macro name: c"]')
                     );
-                    const sourceLineBreaksAfterClozes = await getSourceLineBreaksAfterClozes(
+                    const sourceClozes = await getSourceClozesFromBlock(
                         blockElement,
                         clozes.length
                     );
                     for (const [clozeIndex, cloze] of clozes.entries()) {
                         if (/c(loze)?[1-9]$/.test((cloze as Element & {title}).title)) {
-                            let content = cloze.innerHTML.replace(LOGSEQ_PLUGIN_CLOZE_REGEXP, "$2");
-                            const {renderClozeMarcosInLogseq} =
-                                LogseqProxy.Settings.getPluginSettings();
-                            if (renderClozeMarcosInLogseq)
-                                content = (
+                            const sourceCloze = sourceClozes[clozeIndex];
+                            let content =
+                                sourceCloze?.content ??
+                                cloze.innerHTML.replace(LOGSEQ_PLUGIN_CLOZE_REGEXP, "$2");
+                            if (renderClozeMarcosInLogseq) {
+                                const renderedMarkdown =
                                     await LogseqToHtmlConverterProxy.convertToHTMLFile(
                                         content,
                                         "markdown",
                                         {displayTags: true, processRefEmbeds: false}
-                                    )
-                                ).html;
+                                    );
+                                content = getInlineHTMLForLogseqRenderedCloze(
+                                    renderedMarkdown.html
+                                );
+                            }
                             // if parent element has class macro
                             if (cloze.parentElement.classList.contains("macro"))
                                 cloze.parentElement.style.display = "initial";
                             const renderedCloze = WindowParentBridge.createElement("span");
                             renderedCloze.className = "anki-cloze";
                             renderedCloze.title = cloze.innerHTML;
-                            renderedCloze.innerHTML = content;
+                            if (renderClozeMarcosInLogseq || !sourceCloze) {
+                                renderedCloze.innerHTML = content;
+                            } else {
+                                renderedCloze.textContent = content;
+                            }
                             cloze.replaceWith(renderedCloze);
-                            renderedCloze
-                                .closest(".block-content-inner, .block-content")
-                                ?.classList.add("logseq-anki-cloze-block");
-                            if (sourceLineBreaksAfterClozes[clozeIndex]) {
-                                insertLineBreakAfterCloze(renderedCloze);
+                            if (
+                                shouldInsertSourceLineBreakAfterLogseqCloze(
+                                    sourceCloze,
+                                    renderClozeMarcosInLogseq
+                                )
+                            ) {
+                                insertLineBreakAfterLogseqCloze(renderedCloze, () =>
+                                    WindowParentBridge.createElement("br")
+                                );
                             }
                         }
                     }
