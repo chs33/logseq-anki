@@ -70,3 +70,4 @@ The replacecloze property is a file graph only feature. It is not available in d
 ## Tips
 
 - Combine cloze syntax with `extra::` blocks to provide mnemonics.
+- Add child blocks under a cloze block to show supporting details on the back of the cloze card.

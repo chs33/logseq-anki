@@ -3,6 +3,7 @@ import "@logseq/libs";
 import type {BlockUUID} from "@logseq/libs/dist/LSPlugin.user";
 import _ from "lodash";
 import {LOGSEQ_CLOZE_NOTE_BLOCK_REGEXP, LOGSEQ_PLUGIN_CLOZE_REGEXP} from "../constants";
+import type {DependencyEntity} from "../logseq/getLogseqContentDirectDependencies";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqContentPreprocessor} from "../logseq/LogseqContentPreprocessor";
 import {LogseqPropertiesHelper} from "../logseq/LogseqPropertiesHelper";
@@ -143,6 +144,7 @@ export const insertLineBreakAfterLogseqCloze = (
 
 export class ClozeNote extends Note {
     public type = "cloze";
+    public children: any[];
 
     public constructor(
         uuid: string,
@@ -150,9 +152,11 @@ export class ClozeNote extends Note {
         format: string,
         properties: any,
         pageId: number,
-        tags: string[]
+        tags: string[] = [],
+        children: any[] = []
     ) {
         super(uuid, content, format, properties, pageId, tags);
+        this.children = children;
     }
 
     public static initLogseqOperations = () => {
@@ -375,6 +379,59 @@ export class ClozeNote extends Note {
         setupAnkiClozeObserverAndRenderThemInLogseqWhenObserved();
     };
 
+    private async getChildrenListHTMLFile(childrenList: any[]): Promise<HTMLFile> {
+        if (!Array.isArray(childrenList) || childrenList.length === 0)
+            return {html: "", assets: new Set<string>(), tags: []};
+
+        const childrenListAssets = new Set<string>();
+        let childrenListHTML = `\n<ul class="children-list left-border">`;
+
+        for (const child of childrenList) {
+            childrenListHTML += `\n<li class="children ${_.get(child, "properties['logseq.orderListType']") === "number" ? "numbered" : ""}">`;
+
+            const childFormat = _.get(child, "format", this.format);
+            const childContent = escapeClozesAndMacroDelimiters(_.get(child, "content", ""));
+            const childHTMLFile = await LogseqToHtmlConverterProxy.convertToHTMLFile(
+                childContent,
+                childFormat
+            );
+            const childHTMLFileWithExtra = await appendExtraToHtmlFile(
+                childHTMLFile,
+                _.get(child, "properties.extra"),
+                childFormat
+            );
+            let childHTML = childHTMLFileWithExtra.html;
+            childHTMLFileWithExtra.assets.forEach((asset) => childrenListAssets.add(asset));
+
+            const nestedChildrenHTMLFile = await this.getChildrenListHTMLFile(
+                _.get(child, "children", [])
+            );
+            childHTML += nestedChildrenHTMLFile.html;
+            nestedChildrenHTMLFile.assets.forEach((asset) => childrenListAssets.add(asset));
+
+            childrenListHTML += `${childHTML}</li>`;
+        }
+
+        childrenListHTML += `</ul>`;
+
+        return {
+            html: childrenListHTML,
+            assets: childrenListAssets,
+            tags: []
+        };
+    }
+
+    private async appendChildrenToHtmlFile(htmlFile: HTMLFile): Promise<HTMLFile> {
+        const childrenHTMLFile = await this.getChildrenListHTMLFile(this.children);
+        if (!childrenHTMLFile.html) return htmlFile;
+
+        const result = _.cloneDeep(htmlFile);
+        childrenHTMLFile.assets.forEach((asset) => result.assets.add(asset));
+        result.html += `\n<div class="extra extra-block">${childrenHTMLFile.html}</div>`;
+
+        return result;
+    }
+
     public async getClozedContentHTML(): Promise<HTMLFile> {
         let cloze_id = 1;
         let clozedContent: string = this.content;
@@ -489,10 +546,11 @@ export class ClozeNote extends Note {
             clozedContent,
             this.format
         );
+        const resultWithChildren = await this.appendChildrenToHtmlFile(result);
 
         // --- Add extra property content (non-indented) ---
         return appendExtraToHtmlFile(
-            result,
+            resultWithChildren,
             _.get(await LogseqProxy.Editor.getBlock(this.uuid), "properties.extra") as string,
             this.format,
             true
@@ -553,7 +611,9 @@ export class ClozeNote extends Note {
                 const pageId = b[0].page?.id;
                 if (!pageId) return null;
 
-                const block = await LogseqProxy.Editor.getBlock(uuid);
+                const block = await LogseqProxy.Editor.getBlock(uuid, {
+                    includeChildren: true
+                });
                 if (block)
                     return new ClozeNote(
                         uuid,
@@ -561,14 +621,34 @@ export class ClozeNote extends Note {
                         block.format,
                         block.properties || {},
                         pageId,
-                        (block.properties?.tags ?? []) as string[]
+                        (block.properties?.tags ?? []) as string[],
+                        block.children
                     );
                 else {
                     return null;
                 }
             })
         );
-        notes = await Note.removeUnwantedNotes(notes);
+        notes = (await Note.removeUnwantedNotes(notes)) as ClozeNote[];
         return notes;
+    }
+
+    public getBlockDependencies(): DependencyEntity[] {
+        function getChildrenUUID(children: any[]): BlockUUID[] {
+            if (!Array.isArray(children)) return [];
+
+            let result: BlockUUID[] = [];
+            for (const child of children) {
+                const uuid = getUUIDFromBlock(child);
+                if (uuid) result.push(uuid as BlockUUID);
+                result = result.concat(getChildrenUUID(child.children));
+            }
+
+            return result;
+        }
+
+        return [this.uuid, ...getChildrenUUID(this.children)].map(
+            (block) => ({type: "Block", value: block}) as DependencyEntity
+        );
     }
 }

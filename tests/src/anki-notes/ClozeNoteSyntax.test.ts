@@ -1,14 +1,20 @@
-import {describe, expect, test} from "vitest";
+import {afterEach, describe, expect, test, vi} from "vitest";
 import {
+    ClozeNote,
     getInlineHTMLForLogseqRenderedCloze,
     getLogseqPluginClozesFromContent,
     insertLineBreakAfterLogseqCloze,
     shouldInsertSourceLineBreakAfterLogseqCloze
 } from "../../../src/anki-notes/ClozeNote";
 import {LOGSEQ_CLOZE_NOTE_BLOCK_REGEXP} from "../../../src/constants";
+import {LogseqProxy} from "../../../src/logseq/LogseqProxy";
 import {LogseqToHtmlConverter} from "../../../src/logseq/LogseqToHtmlConverter";
 
 describe("ClozeNote syntax detection", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     test.each([
         "{{c1 A}}",
         "{{c9 B}}",
@@ -182,5 +188,80 @@ describe("ClozeNote syntax detection", () => {
 
         expect(shouldInsertSourceLineBreakAfterLogseqCloze(sourceCloze, true)).toBe(false);
         expect(shouldInsertSourceLineBreakAfterLogseqCloze(sourceCloze, false)).toBe(true);
+    });
+
+    test("renders child blocks as answer-side context", async () => {
+        vi.spyOn(LogseqProxy.App, "checkCurrentIsDbGraph").mockResolvedValue(false);
+        vi.spyOn(LogseqProxy.Editor, "getBlock").mockResolvedValue({
+            properties: {}
+        } as any);
+
+        const note = new ClozeNote(
+            "parent-uuid",
+            "{{c1 hidden answer}}",
+            "markdown",
+            {},
+            1,
+            [],
+            [
+                {
+                    uuid: "child-uuid",
+                    content: "Child detail",
+                    format: "markdown",
+                    properties: {},
+                    children: [
+                        {
+                            uuid: "nested-child-uuid",
+                            content: "Nested detail",
+                            format: "markdown",
+                            properties: {extra: "Nested extra"},
+                            children: []
+                        }
+                    ]
+                }
+            ]
+        );
+
+        const htmlFile = await note.getClozedContentHTML();
+
+        expect(htmlFile.html).toContain('class="extra extra-block"');
+        expect(htmlFile.html).toContain('class="children-list left-border"');
+        expect(htmlFile.html).toContain("Child detail");
+        expect(htmlFile.html).toContain("Nested detail");
+        expect(htmlFile.html).toContain("Nested extra");
+    });
+
+    test("includes child block UUIDs in cloze dependencies", () => {
+        const note = new ClozeNote(
+            "parent-uuid",
+            "{{c1 hidden answer}}",
+            "markdown",
+            {},
+            1,
+            [],
+            [
+                {
+                    uuid: "child-uuid",
+                    content: "Child detail",
+                    format: "markdown",
+                    properties: {},
+                    children: [
+                        {
+                            uuid: "nested-child-uuid",
+                            content: "Nested detail",
+                            format: "markdown",
+                            properties: {},
+                            children: []
+                        }
+                    ]
+                }
+            ]
+        );
+
+        expect(note.getBlockDependencies()).toEqual([
+            {type: "Block", value: "parent-uuid"},
+            {type: "Block", value: "child-uuid"},
+            {type: "Block", value: "nested-child-uuid"}
+        ]);
     });
 });
