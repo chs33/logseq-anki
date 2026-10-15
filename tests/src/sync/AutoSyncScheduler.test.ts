@@ -169,6 +169,46 @@ describe("AutoSyncScheduler", () => {
         );
     });
 
+    test("accepts the newly built index while the cleared setting is still propagating", async () => {
+        testState.settings = {
+            autoSyncFullSyncRequired: true,
+            autoSyncFullSyncRequiredReason: "Previous unsupported change"
+        };
+        runner.mockImplementationOnce(async () => {
+            targetedSyncIndex.replaceAll("Graph", [], []);
+            return {status: "completed", changed: false};
+        });
+
+        initScheduler();
+        applySettingsChange({autoSyncEnabled: true});
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(testState.settings.autoSyncEnabled).toBe(true);
+        expect(logseq.UI.showMsg).toHaveBeenCalledWith(
+            "Full Sync completed. Targeted Auto Sync is now enabled.",
+            "success",
+            expect.any(Object)
+        );
+    });
+
+    test("does not reuse an index from before Auto Sync initialization", async () => {
+        targetedSyncIndex.replaceAll("Graph", [], []);
+        runner.mockResolvedValueOnce({status: "completed", changed: false});
+
+        initScheduler();
+        applySettingsChange({autoSyncEnabled: true});
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(testState.settings.autoSyncEnabled).toBe(false);
+        expect(logseq.UI.showMsg).toHaveBeenCalledWith(
+            expect.stringContaining("did not build the targeted dependency index"),
+            "warning",
+            expect.any(Object)
+        );
+    });
+
     test("queues changes received during the initializing Full Sync", async () => {
         let resolveInitialization: (value: any) => void = () => {};
         runner.mockImplementationOnce(

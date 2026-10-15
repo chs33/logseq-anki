@@ -151,6 +151,7 @@ export class AutoSyncScheduler {
         this.pendingChanges = [];
         this.lastChangeAtMs = null;
         this.clearTimer();
+        targetedSyncIndex.clear();
 
         void logseq.UI.showMsg("Running Full Sync before enabling targeted Auto Sync…", "success", {
             timeout: 5000
@@ -212,11 +213,13 @@ export class AutoSyncScheduler {
         if (outcome.status === "skipped") return "Full Sync was skipped.";
         if (outcome.status === "failed") return "Full Sync failed.";
 
-        const fullSyncRequiredReason = TargetedAutoSyncState.getFullSyncRequiredReason();
-        if (TargetedAutoSyncState.isFullSyncRequired()) {
-            return fullSyncRequiredReason || "Full Sync did not finish a complete reconciliation.";
-        }
         if (targetedSyncIndex.getGraphName() == null) {
+            const fullSyncRequiredReason = TargetedAutoSyncState.getFullSyncRequiredReason();
+            if (TargetedAutoSyncState.isFullSyncRequired()) {
+                return (
+                    fullSyncRequiredReason || "Full Sync did not finish a complete reconciliation."
+                );
+            }
             return "Full Sync did not build the targeted dependency index.";
         }
         return null;
