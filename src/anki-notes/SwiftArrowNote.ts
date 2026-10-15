@@ -3,6 +3,7 @@ import "@logseq/libs";
 import type {BlockUUID} from "@logseq/libs/dist/LSPlugin.user";
 import _ from "lodash";
 import {createLogger, LoggerCategory} from "../logger";
+import createBlockUuidFilterClause from "../logseq/createBlockUuidFilterClause";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqContentPreprocessor} from "../logseq/LogseqContentPreprocessor";
 import {LogseqProxy} from "../logseq/LogseqProxy";
@@ -45,9 +46,9 @@ export class SwiftArrowNote extends Note {
         clozedContent = safeReplace(
             clozedContent,
             /(.*?)(\s*(:<->|:->|:<-)\s*)(.+)/s,
-            (match, g1, g2, g3, g4) => {
+            (_match, g1, g2, g3, g4) => {
                 let replacement = "";
-                if (g3 == ":<-" || g3 == ":<->") {
+                if (g3 === ":<-" || g3 === ":<->") {
                     replacement += `${startDoubleBracket}2${doubleSemicolon}${g1.trim()}${endDoubleBracket}`;
                 } else replacement += `${g1.trim()}`;
                 const beforeArrowSpace = g2.split(/(:<->|:->|:<-)/s)[0];
@@ -56,7 +57,7 @@ export class SwiftArrowNote extends Note {
                     `${beforeArrowSpace}${beforeArrowSpace.endsWith(" ") ? "" : " "}` +
                     `<b>${g3}</b>` +
                     `${afterArrowSpace.startsWith(" ") ? "" : " "}${afterArrowSpace}`;
-                if (g3 == ":->" || g3 == ":<->") {
+                if (g3 === ":->" || g3 === ":<->") {
                     replacement += `${startDoubleBracket}1${doubleSemicolon}${g4.trim()}${endDoubleBracket}`;
                 } else replacement += `${g4.trim()}`;
                 return replacement;
@@ -81,12 +82,16 @@ export class SwiftArrowNote extends Note {
         );
     }
 
-    public static async getNotesFromLogseqBlocks(): Promise<SwiftArrowNote[]> {
+    public static async getNotesFromLogseqBlocks(
+        candidateRootUuids?: ReadonlySet<string>
+    ): Promise<SwiftArrowNote[]> {
         type DatascriptQueryResult = [] | [{uuid: BlockUUID; page: {id: number}}][];
+        const candidateFilter = createBlockUuidFilterClause(candidateRootUuids);
         const singleSwiftArrowBlocks: DatascriptQueryResult = await LogseqProxy.DB.datascriptQuery(
             `
         [:find (pull ?b [:block/uuid :block/page])                                                                                                                    
          :where                                                                                                                                                       
+         ${candidateFilter}
          [(re-pattern ":(<->|->|<-)") ?regex]                                                                                                                         
          (or                                                                                                                                                          
            (and [?b :block/content ?content]                                                                                                                          
@@ -95,7 +100,10 @@ export class SwiftArrowNote extends Note {
                 [(re-find ?regex ?content)]))]`,
             {suppressErrors: false}
         );
-        const blocks = [...(singleSwiftArrowBlocks || [])];
+        const blocks = [...(singleSwiftArrowBlocks || [])].filter((block) => {
+            const uuid = getUUIDFromBlock(block[0]).toLowerCase();
+            return candidateRootUuids == null || candidateRootUuids.has(uuid);
+        });
         let notes = await Promise.all(
             blocks.map(async (b) => {
                 const uuid = getUUIDFromBlock(b[0]);
@@ -123,7 +131,7 @@ export class SwiftArrowNote extends Note {
             // Remove notes that do not genetate any clozes
             const note_content = note.content;
             let cardGenerated = false;
-            safeReplace(note_content, /(.+?)(\s*(:<->|:->|:<-)\s*)(.+)/s, (match, ...groups) => {
+            safeReplace(note_content, /(.+?)(\s*(:<->|:->|:<-)\s*)(.+)/s, (match, ..._groups) => {
                 cardGenerated = true;
                 return match;
             });

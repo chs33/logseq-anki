@@ -1,20 +1,25 @@
 import {createLogger, LoggerCategory} from "../../logger";
 import {LogseqProxy} from "../../logseq/LogseqProxy";
+import {
+    NOTIFICATION_CARD_STYLE,
+    NOTIFICATION_MOUNT_PATH,
+    NOTIFICATION_OVERLAY_STYLE
+} from "./NotificationOverlay";
 
 const logger = createLogger(LoggerCategory.Others);
 
 interface ActionButton {
     name: string;
-    func: Function;
+    func: () => void;
 }
 
-export async function ActionNotification(
+export function ActionNotification(
     btns: ActionButton[],
     msg: string,
     timeout?: number,
     icon?: string
-): Promise<string> {
-    return new Promise<string>(async (resolve, reject) => {
+): Promise<string | null> {
+    return new Promise<string | null>((resolve, reject) => {
         const uniqueNotificationId =
             Math.random().toString(36).substring(2, 15) +
             Math.random().toString(36).substring(2, 15);
@@ -63,13 +68,17 @@ export async function ActionNotification(
             // Provide UI
             logseq.provideUI({
                 key: uiKey,
-                path: "div.notifications",
+                path: NOTIFICATION_MOUNT_PATH,
                 template: `
-                    <div class="ui__notifications-content enter-done">
-                        <div class="max-w-sm w-full shadow-lg rounded-lg pointer-events-auto notification-area transition ease-out duration-300 transform translate-y-0 opacity-100 sm:translate-x-0">
-                            <div class="rounded-lg shadow-xs" style="max-height: calc(100vh - 200px); overflow: hidden auto;">
-                                <div class="p-4">
-                                    <div class="flex items-start">
+                    <div
+                        class="logseq-anki-notification-overlay"
+                        role="status"
+                        aria-live="polite"
+                        style="${NOTIFICATION_OVERLAY_STYLE}"
+                    >
+                        <div class="logseq-anki-notification-card" style="${NOTIFICATION_CARD_STYLE}">
+                            <div style="max-height: calc(100vh - 2rem); overflow: hidden auto;">
+                                    <div class="flex items-start" style="display: flex; align-items: flex-start;">
                                         <div class="flex-shrink-0">
                                             ${icon || ""}
                                         </div>
@@ -108,7 +117,6 @@ export async function ActionNotification(
                                             </button>
                                         </div>
                                     </div>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -134,7 +142,13 @@ export async function ActionNotification(
             LogseqProxy.App.registerPluginUnloadListener(closeNotification);
         } catch (e) {
             logger.error("Failed to show action notification", e);
-            await logseq.UI.showMsg(msg, "success");
+            try {
+                void logseq.UI.showMsg(msg, "success").catch((fallbackError) =>
+                    logger.error("Failed to show fallback notification", fallbackError)
+                );
+            } catch (fallbackError) {
+                logger.error("Failed to show fallback notification", fallbackError);
+            }
             reject(e);
         }
     });

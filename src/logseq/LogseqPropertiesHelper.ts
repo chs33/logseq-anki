@@ -81,6 +81,45 @@ export class LogseqPropertiesHelper {
     }
 
     /**
+     * Preserves the existing property precedence while ensuring raw DB entity tag
+     * references cannot replace the normalized tag names and ids.
+     */
+    private static mergePropertiesWithNormalizedTags(
+        normalizedProperties: Record<string, any>,
+        existingProperties: Record<string, any>
+    ): Record<string, any> {
+        return {
+            ...normalizedProperties,
+            ...existingProperties,
+            tags: normalizedProperties.tags,
+            tagIds: normalizedProperties.tagIds
+        };
+    }
+
+    /**
+     * A DB graph's wildcard DataScript pull exposes every stored property as a
+     * namespaced attribute on the block. Avoid the much slower property API only
+     * when that pull proves the block has no properties, aliases, or classes.
+     *
+     * Tagged blocks must still use getBlockProperties because Logseq can supply
+     * class-default values that are not stored directly on the block.
+     */
+    private static dbBlockRequiresPropertyHydration(block: BlockEntity): boolean {
+        if (Object.keys(block.properties || {}).length > 0) return true;
+        if (Array.isArray(block.tags) && block.tags.length > 0) return true;
+        if (Array.isArray((block as any).alias) && (block as any).alias.length > 0) return true;
+
+        return Object.keys(block).some((rawKey) => {
+            const key = rawKey.startsWith(":") ? rawKey.substring(1) : rawKey;
+            const namespaceEnd = key.indexOf("/");
+            if (namespaceEnd === -1) return false;
+
+            const namespace = key.substring(0, namespaceEnd);
+            return namespace === "logseq.property" || namespace.includes(".property");
+        });
+    }
+
+    /**
      * Removes properties prefixes such as :plugin.property.rw1zys138 from properties obj and add them to result property
      * Logseq DB adds such prefixes to properties. To maintain compatibility with file version of code, this needs to be done.
      * Note: This is inclusive, meaning old properties remain along with strippedProperties
@@ -174,15 +213,18 @@ export class LogseqPropertiesHelper {
     ): Promise<void> {
         if (!b?.uuid) return;
 
-        const properties = await logseq.Editor.getBlockProperties(b.uuid);
+        const properties =
+            !isDbGraph || LogseqPropertiesHelper.dbBlockRequiresPropertyHydration(b)
+                ? await logseq.Editor.getBlockProperties(b.uuid)
+                : null;
         if (properties) {
-            b.properties = {
-                ...LogseqPropertiesHelper.handleTagProperty(
+            b.properties = LogseqPropertiesHelper.mergePropertiesWithNormalizedTags(
+                LogseqPropertiesHelper.handleTagProperty(
                     b,
                     LogseqPropertiesHelper.addStripedPropertyPrefixes(properties)
                 ),
-                ...b.properties
-            };
+                b.properties
+            );
             if (b.properties["tags"] && typeof b.properties["tags"] === "string") {
                 b.properties["tags"] = b.properties["tags"]
                     .split(",")
@@ -237,7 +279,10 @@ export class LogseqPropertiesHelper {
                     page,
                     LogseqPropertiesHelper.addStripedPropertyPrefixes(properties)
                 );
-                page.properties = {...strippedProperties, ...page.properties};
+                page.properties = LogseqPropertiesHelper.mergePropertiesWithNormalizedTags(
+                    strippedProperties,
+                    page.properties
+                );
             }
         }
 
@@ -278,11 +323,17 @@ export class LogseqPropertiesHelper {
         try {
             if (typeof srcBlock === "string" && UUID_REGEXP.test(srcBlock)) {
                 rows = await logseq.DB.datascriptQuery(
-                    LogseqPropertiesHelper.buildDbGraphBlockByUuidQuery(srcBlock.toLowerCase())
+                    LogseqPropertiesHelper.buildDbGraphBlockByUuidQuery(
+                        srcBlock.toLowerCase(),
+                        includeChildren
+                    )
                 );
             } else if (typeof srcBlock === "number") {
                 rows = await logseq.DB.datascriptQuery(
-                    LogseqPropertiesHelper.buildDbGraphBlockByEntityIdQuery(srcBlock)
+                    LogseqPropertiesHelper.buildDbGraphBlockByEntityIdQuery(
+                        srcBlock,
+                        includeChildren
+                    )
                 );
             }
         } catch (_e) {
@@ -291,70 +342,48 @@ export class LogseqPropertiesHelper {
 
         const block = LogseqPropertiesHelper.normalizeDatascriptBlock(rows?.[0]?.[0]);
         if (!block?.uuid) return null;
-
-        if (includeChildren) {
-            block.children = await LogseqPropertiesHelper.getDbGraphBlockChildren(block.uuid);
-        }
-
         return block;
     }
 
-    private static async getDbGraphBlockChildren(parentUuid: string): Promise<BlockEntity[]> {
-        const rows = await logseq.DB.datascriptQuery(
-            LogseqPropertiesHelper.buildDbGraphChildrenQuery(parentUuid)
-        );
-        const children = (rows || [])
-            .map((row: any[]) => LogseqPropertiesHelper.normalizeDatascriptBlock(row?.[0]))
-            .filter((block: BlockEntity | null): block is BlockEntity => Boolean(block))
-            .sort((a: any, b: any) => String(a.order || "").localeCompare(String(b.order || "")));
+    private static buildDbGraphBlockPullPattern(includeChildren: boolean): string {
+        const childrenPull = includeChildren ? "{[:block/_parent :as :block/children] ...}" : "";
 
-        for (const child of children) {
-            child.children = await LogseqPropertiesHelper.getDbGraphBlockChildren(child.uuid);
-        }
-
-        return children;
-    }
-
-    private static buildDbGraphBlockByUuidQuery(uuid: string): string {
-        return `
-            [:find (pull ?b [*
+        return `[*
                 {:block/page [:db/id :block/uuid :block/name :block/title]}
                 {:block/parent [:db/id :block/uuid :block/title]}
-                {:block/left [:db/id :block/uuid :block/title]}
                 {:block/link [:db/id :block/uuid :block/name :block/title]}
-                {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
+                {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}
+                ${childrenPull}]`;
+    }
+
+    private static buildDbGraphBlockByUuidQuery(
+        uuid: string,
+        includeChildren: boolean = false
+    ): string {
+        return `
+            [:find (pull ?b ${LogseqPropertiesHelper.buildDbGraphBlockPullPattern(includeChildren)})
             :where
             [?b :block/uuid #uuid "${uuid}"]]`;
     }
 
-    private static buildDbGraphBlockByEntityIdQuery(entityId: number): string {
+    private static buildDbGraphBlockByEntityIdQuery(
+        entityId: number,
+        includeChildren: boolean = false
+    ): string {
         return `
-            [:find (pull ?b [*
-                {:block/page [:db/id :block/uuid :block/name :block/title]}
-                {:block/parent [:db/id :block/uuid :block/title]}
-                {:block/left [:db/id :block/uuid :block/title]}
-                {:block/link [:db/id :block/uuid :block/name :block/title]}
-                {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
+            [:find (pull ?b ${LogseqPropertiesHelper.buildDbGraphBlockPullPattern(includeChildren)})
             :where
             [(identity ${entityId}) ?b]
             [?b :block/uuid _]]`;
     }
 
-    private static buildDbGraphChildrenQuery(parentUuid: string): string {
-        return `
-            [:find (pull ?child [*
-                {:block/page [:db/id :block/uuid :block/name :block/title]}
-                {:block/parent [:db/id :block/uuid :block/title]}
-                {:block/left [:db/id :block/uuid :block/title]}
-                {:block/link [:db/id :block/uuid :block/name :block/title]}
-                {:block/tags [:db/id :block/uuid :block/name :block/title :db/ident]}])
-            :where
-            [?parent :block/uuid #uuid "${parentUuid}"]
-            [?child :block/parent ?parent]]`;
-    }
-
     private static normalizeDatascriptBlock(block: any): BlockEntity | null {
         if (!block?.uuid) return null;
+
+        const children = (Array.isArray(block.children) ? block.children : [])
+            .map((child: any) => LogseqPropertiesHelper.normalizeDatascriptBlock(child))
+            .filter((child: BlockEntity | null): child is BlockEntity => child !== null)
+            .sort((a: any, b: any) => String(a.order || "").localeCompare(String(b.order || "")));
 
         const normalizedBlock = {
             ...block,
@@ -365,14 +394,17 @@ export class LogseqPropertiesHelper {
             properties: block.properties ?? {},
             page: LogseqPropertiesHelper.normalizeDatascriptEntity(block.page),
             parent: LogseqPropertiesHelper.normalizeDatascriptEntity(block.parent),
-            left: LogseqPropertiesHelper.normalizeDatascriptEntity(block.left),
+            left:
+                typeof block.left === "object" && block.left !== null
+                    ? LogseqPropertiesHelper.normalizeDatascriptEntity(block.left)
+                    : block.left,
             link: LogseqPropertiesHelper.normalizeDatascriptEntity(block.link),
             tags: Array.isArray(block.tags)
                 ? block.tags.map((tag: any) =>
                       LogseqPropertiesHelper.normalizeDatascriptEntity(tag)
                   )
                 : [],
-            children: block.children ?? [],
+            children,
             createdAt: block.createdAt ?? block["created-at"],
             updatedAt: block.updatedAt ?? block["updated-at"]
         } as BlockEntity;
@@ -402,8 +434,11 @@ export class LogseqPropertiesHelper {
         const isDbGraph = await LogseqPropertiesHelper.checkCurrentIsDbGraph();
         let block: BlockEntity | null = null;
 
-        if (isDbGraph && !opts.includeChildren) {
-            block = await LogseqPropertiesHelper.getDbGraphBlockFromDatascript(srcBlock, false);
+        if (isDbGraph) {
+            block = await LogseqPropertiesHelper.getDbGraphBlockFromDatascript(
+                srcBlock,
+                opts.includeChildren
+            );
         }
 
         try {

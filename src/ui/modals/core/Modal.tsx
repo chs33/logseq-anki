@@ -1,5 +1,6 @@
 import FocusTrap from "focus-trap-react";
 import React, {type PropsWithChildren} from "../../React";
+import {createOpaqueSurfaceStyle} from "../../styles/opaqueSurface";
 import {UI} from "../../UI";
 
 const focusTrapOptions = {
@@ -37,11 +38,6 @@ export function Modal({
         UI.hideModal();
     }, [setOpen, onClose]);
 
-    let style = {};
-    if (size === "large") {
-        style = {...style, width: "90vw"};
-    }
-
     if (!open) return null;
 
     // Calculate z-index based on modal depth (number of modals currently open)
@@ -60,7 +56,13 @@ export function Modal({
                 {/* Modal Panel */}
                 <div
                     className="relative bg-secondary-background border border-border rounded-md shadow-lg z-10"
-                    style={size === "large" ? {width: "90vw"} : {width: "60vw"}}>
+                    style={{
+                        ...createOpaqueSurfaceStyle(
+                            "--ls-secondary-background-color",
+                            "--ls-primary-background-color"
+                        ),
+                        width: size === "large" ? "90vw" : "60vw"
+                    }}>
                     {hasCloseButton && (
                         <div className="absolute top-0 right-0 pt-2 pr-2">
                             <button
@@ -69,6 +71,7 @@ export function Modal({
                                 className="text-gray-400 hover:text-gray-600 opacity-60 hover:opacity-100 transition-opacity cursor-pointer bg-transparent border-none"
                                 onClick={handleClose}>
                                 <svg
+                                    aria-hidden="true"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
                                     fill="none"

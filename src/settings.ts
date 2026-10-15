@@ -23,9 +23,12 @@ export interface PluginSettings {
     debug?: LoggerCategory[];
     skipOnDependencyHashMatch?: boolean;
     autoSyncEnabled?: boolean;
-    autoSyncIntervalSeconds?: number | string;
     autoSyncAnkiWebAfterChanges?: boolean;
     lastWelcomeVersion?: string;
+    lastSyncDiagnostics?: string;
+    autoSyncFullSyncRequired?: boolean;
+    autoSyncFullSyncRequiredReason?: string;
+    lastTargetedAutoSyncDiagnostics?: string;
 }
 
 export const addSettingsToLogseq = async () => {
@@ -122,15 +125,7 @@ export const addSettingsToLogseq = async () => {
             default: false,
             title: "Enable auto sync? (Recommended: Disabled)",
             description:
-                "When enabled, the plugin will periodically look for Logseq notes eligible to create or update in Anki. Auto sync is turned off again whenever the plugin starts."
-        },
-        {
-            key: "autoSyncIntervalSeconds",
-            type: "number",
-            default: 60,
-            title: "Auto sync interval in seconds (Minimum: 60)",
-            description:
-                "How often auto sync checks for eligible notes. Values below 60 seconds are treated as 60 seconds."
+                "Turning this on first runs an authoritative Full Sync, applies every detected change without confirmation, and enables targeted Auto Sync only if it completes successfully. Recognized Logseq database changes then trigger debounced targeted syncs. Unsupported changes display Full sync required instead of scanning the whole graph. Auto Sync is turned off again whenever the plugin starts."
         },
         {
             key: "autoSyncAnkiWebAfterChanges",

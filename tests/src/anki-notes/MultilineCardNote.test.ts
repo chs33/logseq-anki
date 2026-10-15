@@ -73,6 +73,72 @@ describe("MultilineCardNote E2E Tests", () => {
     );
 });
 
+describe("MultilineCardNote duplicate note filtering", () => {
+    const cardUuid = "cloze-card";
+
+    const mockCardBlock = (tags: string[] = ["card"]) => {
+        vi.spyOn(LogseqProxy.App, "checkCurrentIsDbGraph").mockResolvedValue(false);
+        vi.spyOn(LogseqProxy.DB, "datascriptQuery")
+            .mockResolvedValueOnce([[{uuid: cardUuid, page: {id: 1}, parent: {id: 10}}]] as any)
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([]);
+        vi.spyOn(LogseqProxy.Editor, "getBlock").mockResolvedValue({
+            uuid: cardUuid,
+            content: "{{c1 hidden answer}} #card",
+            format: "markdown",
+            properties: {tags},
+            children: [
+                {
+                    uuid: "answer-context",
+                    content: "Supporting detail",
+                    format: "markdown",
+                    properties: {},
+                    children: []
+                }
+            ]
+        } as any);
+        vi.spyOn(Note, "removeUnwantedNotes").mockImplementation(
+            async (notes) => notes.filter(Boolean) as Note[]
+        );
+    };
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    test("does not generate a multiline note when cloze children are answer context", async () => {
+        mockCardBlock();
+
+        const notes = await MultilineCardNote.getNotesFromLogseqBlocks([
+            {uuid: cardUuid, type: "cloze"} as Note
+        ]);
+
+        expect(notes).toEqual([]);
+    });
+
+    test("allows an explicitly directed multiline note alongside the cloze note", async () => {
+        mockCardBlock(["card", "forward"]);
+
+        const notes = await MultilineCardNote.getNotesFromLogseqBlocks([
+            {uuid: cardUuid, type: "cloze"} as Note
+        ]);
+
+        expect(notes).toHaveLength(1);
+        expect(notes[0].type).toBe("multiline_card");
+    });
+
+    test("preserves multiline notes with children for non-cloze note combinations", async () => {
+        mockCardBlock();
+
+        const notes = await MultilineCardNote.getNotesFromLogseqBlocks([
+            {uuid: cardUuid, type: "swift_arrow"} as Note
+        ]);
+
+        expect(notes).toHaveLength(1);
+        expect(notes[0].type).toBe("multiline_card");
+    });
+});
+
 describe("MultilineCardNote DB card-group filtering", () => {
     afterEach(() => {
         vi.restoreAllMocks();

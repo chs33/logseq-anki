@@ -4,6 +4,7 @@ import type {BlockUUID} from "@logseq/libs/dist/LSPlugin.user";
 import _ from "lodash";
 import {MD_PROPERTIES_REGEXP, ORG_PROPERTIES_REGEXP} from "../constants";
 import {createLogger, LoggerCategory} from "../logger";
+import createBlockUuidFilterClause from "../logseq/createBlockUuidFilterClause";
 import type {DependencyEntity} from "../logseq/getLogseqContentDirectDependencies";
 import getParentBlockIdentity from "../logseq/getParentBlockIdentity";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
@@ -206,9 +207,11 @@ export class MultilineCardNote extends Note {
     }
 
     public static async getNotesFromLogseqBlocks(
-        otherNotes: Array<Note>
+        otherNotes: Array<Note>,
+        candidateRootUuids?: ReadonlySet<string>
     ): Promise<MultilineCardNote[]> {
         const isDbGraph = await LogseqProxy.App.checkCurrentIsDbGraph();
+        const candidateFilter = createBlockUuidFilterClause(candidateRootUuids);
         type DatascriptQueryResult =
             | []
             | [{uuid: BlockUUID; page: {id: number}; parent: {id: number}}][];
@@ -221,6 +224,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?p :block/name "card"]
                 [?b :block/refs ?p]
                 ]`,
@@ -231,6 +235,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?p :block/name "flashcard"]
                 [?b :block/refs ?p]
                 ]`,
@@ -241,6 +246,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?r :block/name "card-group"]
                 [?p :block/refs ?r]
                 [?b :block/parent ?p]
@@ -253,6 +259,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?p :block/name "card"]
                 [?b :block/tags ?p]
                 ]`,
@@ -263,6 +270,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?p :block/name "flashcard"]
                 [?b :block/tags ?p]
                 ]`,
@@ -273,6 +281,7 @@ export class MultilineCardNote extends Note {
                     `
                 [:find (pull ?b [:block/uuid :block/page :block/parent])
                 :where
+                ${candidateFilter}
                 [?r :block/name "card-group"]
                 [?p :block/tags ?r]
                 [?b :block/parent ?p]
@@ -280,14 +289,26 @@ export class MultilineCardNote extends Note {
                     {suppressErrors: false}
                 )) || [];
         }
+        const isCandidate = (block: [{uuid: BlockUUID}]): boolean => {
+            const uuid = getUUIDFromBlock(block[0]).toLowerCase();
+            return candidateRootUuids == null || candidateRootUuids.has(uuid);
+        };
+        logseqCard_blocks = logseqCard_blocks.filter(isCandidate);
+        flashCard_blocks = flashCard_blocks.filter(isCandidate);
+        logseqCardGroup_blocks = logseqCardGroup_blocks.filter(isCandidate);
+
         logseqCardGroup_blocks = await Promise.all(
             logseqCardGroup_blocks.map(async (block) => {
                 const parent = getParentBlockIdentity(block[0] as any);
                 const parentBlock =
                     parent == null ? null : await LogseqProxy.Editor.getBlock(parent);
                 const tags = _.get(parentBlock, "properties.tags", []) as string[];
-                block[0].tagsFromParentCardGroup = [...tags];
-                block[0].propertyValuesFromParentCardGroup =
+                const enrichedBlock = block[0] as (typeof block)[0] & {
+                    tagsFromParentCardGroup: string[];
+                    propertyValuesFromParentCardGroup: string[];
+                };
+                enrichedBlock.tagsFromParentCardGroup = [...tags];
+                enrichedBlock.propertyValuesFromParentCardGroup =
                     MultilineCardNote.getComparablePropertyValues(parentBlock?.properties || {});
                 return block;
             })
@@ -342,14 +363,20 @@ export class MultilineCardNote extends Note {
         logger.info("MultilineCardNote Loaded");
         notes = (await Note.removeUnwantedNotes(notes)) as MultilineCardNote[];
         notes = _.filter(notes, (note) => {
-            // Retain only blocks whose children count > 0 or direction is expictly specifed or no other note type is being generated from that block
+            const notesFromSameBlock = otherNotes.filter(
+                (otherNote) => otherNote.uuid === note.uuid
+            );
+            const hasClozeNote = notesFromSameBlock.some((otherNote) => otherNote.type === "cloze");
+
+            // Cloze notes render their children as answer-side context. Only generate an additional
+            // multiline note when its direction was explicitly configured.
             return (
                 _.get(note, "properties.direction") ||
                 note.tags.includes("forward") ||
                 note.tags.includes("bidirectional") ||
                 note.tags.includes("reversed") ||
-                note.children.length > 0 ||
-                !_.find(otherNotes, {uuid: note.uuid})
+                (note.children.length > 0 && !hasClozeNote) ||
+                notesFromSameBlock.length === 0
             );
         }) as MultilineCardNote[];
         return notes;

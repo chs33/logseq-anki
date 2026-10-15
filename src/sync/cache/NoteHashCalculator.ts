@@ -7,7 +7,6 @@
  * 4. Logseq Page Id field
  */
 
-import _ from "lodash";
 import pMemoize, {pMemoizeClear} from "p-memoize";
 import path from "path-browserify";
 import pkg from "../../../package.json";
@@ -21,6 +20,7 @@ import {WindowParentBridge} from "../../logseq/WindowParentBridge";
 import objectHashOptimized from "../../utils/objectHashOptimized";
 import type {ParsedNoteData} from "../types";
 import {getBlockHash, getPageHash} from "./BlockAndPageHashCache";
+import getHashRelevantSettings from "./getHashRelevantSettings";
 
 const logger = createLogger(LoggerCategory.SyncCacheLayer);
 
@@ -59,27 +59,36 @@ export default class NoteHashCalculator {
     public static async getHash(note: Note, ankiFields: ParsedNoteData): Promise<number> {
         const toHash = [];
         const dependencies = note.getBlockDependencies();
+        const settings = LogseqProxy.Settings.getPluginSettings();
 
-        // Only consider parent content if includeParentContent is true
-        // No need to consider parent content for breadcrumbs as
-        // we use the page updatedAt timestamp in hash
-        // This is req since otherwise on property value change of parent block, hash won't change.
+        // Parent properties can change inherited deck, direction, tags, suspension, and eligibility
+        // even when parent text is not rendered. Parent content itself is a full dependency only
+        // when it is rendered in card content or breadcrumbs.
         let parentID = getParentBlockIdentity(await LogseqProxy.Editor.getBlock(note.uuid));
         let parent = null;
-        const {includeParentContent} = LogseqProxy.Settings.getPluginSettings();
-        if (includeParentContent) {
-            parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
-            while (parent != null) {
-                const logseqBlockUUID = getUUIDFromBlock(parent);
-                if (logseqBlockUUID) {
+        const includeParentText =
+            settings.includeParentContent === true ||
+            settings.breadcrumbDisplayOptions?.includes("Parent blocks") === true;
+        parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
+        while (parent != null) {
+            const logseqBlockUUID = getUUIDFromBlock(parent);
+            if (logseqBlockUUID) {
+                toHash.push([
+                    "ancestor-semantics",
+                    logseqBlockUUID,
+                    parent.properties || {},
+                    getParentBlockIdentity(parent),
+                    parent.page
+                ]);
+                if (includeParentText) {
                     dependencies.push({
                         type: "Block",
                         value: logseqBlockUUID
                     });
                 }
-                parentID = getParentBlockIdentity(parent);
-                parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
             }
+            parentID = getParentBlockIdentity(parent);
+            parent = parentID == null ? null : await LogseqProxy.Editor.getBlock(parentID);
         }
 
         // Get hash of all dependency blocks and pages
@@ -107,22 +116,7 @@ export default class NoteHashCalculator {
         // Graph deep links are rendered into Anki fields and must invalidate stale card URLs.
         toHash.push(await LogseqProxy.App.getCurrentGraphNameForLogseqLinks());
 
-        const settings = LogseqProxy.Settings.getPluginSettings();
-        toHash.push(
-            _.omit(settings, [
-                "addonsList",
-                "renderClozeMarcosInLogseq",
-                "hideClozeMarcosUntilHoverInLogseq",
-                "skipOnDependencyHashMatch",
-                "ankiConnectPort",
-                "autoSyncEnabled",
-                "autoSyncIntervalSeconds",
-                "autoSyncAnkiWebAfterChanges",
-                "lastWelcomeVersion",
-                "ankiFieldOptions",
-                "debug"
-            ])
-        );
+        toHash.push(getHashRelevantSettings(settings));
         toHash.push(pkg.version);
 
         // Add additional things from ankiFields to toHash

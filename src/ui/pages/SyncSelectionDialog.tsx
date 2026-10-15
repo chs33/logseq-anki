@@ -11,6 +11,7 @@ import {LogseqDropdownMenu} from "../components/LogseqDropdownMenu";
 import {LogseqPopover} from "../components/LogseqPopover";
 import {LogseqTooltip} from "../components/LogseqTooltip";
 import React, {useCallback, useEffect, useState} from "../React";
+import {createOpaqueSurfaceStyle} from "../styles/opaqueSurface";
 import {UI} from "../UI";
 
 export const SyncSelectionDialogComponent: React.FC<{
@@ -425,13 +426,16 @@ export const SyncSelectionDialogComponent: React.FC<{
                         content={
                             <div
                                 style={{
+                                    ...createOpaqueSurfaceStyle(
+                                        "--ls-popover-background-color",
+                                        "--ls-primary-background-color"
+                                    ),
                                     boxShadow:
                                         "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
                                     borderRadius: "0.25rem",
                                     overflow: "hidden",
                                     margin: 0,
                                     padding: "10px",
-                                    backgroundColor: "var(--ls-primary-background-color)",
                                     width: "200px"
                                 }}>
                                 <LogseqCheckbox

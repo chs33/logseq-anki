@@ -26,26 +26,6 @@ const clearGraph = () => {
     graph = new DepGraph();
 };
 
-const removeBlockNode = (blockUUID: BlockUUID) => {
-    blockUUID = blockUUID.toLowerCase(); // Convert to lowercase to avoid case sensitivity issues
-
-    if (!graph.hasNode(blockUUID + "Block")) return;
-    graph.dependantsOf(blockUUID + "Block").forEach((dependant) => {
-        graph.removeNode(dependant);
-    });
-    graph.removeNode(blockUUID + "Block");
-};
-
-const removePageNode = (pageId: number) => {
-    const pageKey = pageId + "PageById";
-
-    if (!graph.hasNode(pageKey)) return;
-    graph.dependantsOf(pageKey).forEach((dependant) => {
-        graph.removeNode(dependant);
-    });
-    graph.removeNode(pageKey);
-};
-
 const addPageNode = async (pageId: number) => {
     const pageKey = pageId + "PageById";
 
@@ -56,7 +36,9 @@ const addPageNode = async (pageId: number) => {
 
     const toHash = [];
     toHash.push([
-        _.get(page, "updatedAt", ""),
+        _.get(page, "name", "") || _.get(page, "originalName", ""),
+        _.get(page, "title", ""),
+        _.get(page, "properties", ""),
         _.get(page, "parent.id", "") || _.get(page, "namespace.id", ""),
         page.id
     ]);
@@ -100,13 +82,12 @@ const addBlockNode = async (blockUUID: BlockUUID) => {
         toHash.push(graph.getNodeData(dependency));
     });
     toHash.push([
-        _.get(blockPage, "updatedAt", ""),
+        _.get(blockPage, "name", "") || _.get(blockPage, "originalName", ""),
         _.get(block, "properties", ""),
-        _.get(block, "updatedAt", ""),
-        _.get(block, "content", "").length,
+        _.get(block, "content", ""),
+        _.get(block, "format", ""),
         _.get(block, "parent.id", ""),
-        _.get(block, "page.id", ""),
-        _.get(block, "left.id", "")
+        _.get(block, "page.id", "")
     ]);
     graph.setNodeData(blockUUID + "Block", objectHashOptimized(toHash));
 };

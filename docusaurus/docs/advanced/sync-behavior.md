@@ -30,7 +30,35 @@ When an existing note's stored dependency hash still matches the current Logseq 
 
 Sync still scans eligible Logseq cards each run so it can detect new cards, changed cards, and stale Anki notes. Manual sync can still show update candidates before the hash skip is applied, but only notes with real changes are sent through the Anki update operation.
 
-Use **Force Regenerate All Anki Cards** from the command palette, or **Force Regenerate All** from the plugin toolbar menu, when you need to rerender every selected existing card even if its dependency hash still matches. This is useful after renderer, template, or Logseq link behavior changes where the stored hash may otherwise prevent an unchanged card from being sent to Anki.
+For DB graphs, the scan loads each candidate card's descendant tree with one recursive database query instead of reading every descendant separately. Blocks that the query proves have no properties, aliases, or tags also skip a redundant property API request. Blocks with any of those values continue through Logseq's normal property resolution, including class defaults. These are performance optimizations only; they do not change which cards are eligible or how they are rendered.
+
+When **Sync Main** info-level logging is enabled, the plugin also saves diagnostics for the most recently completed sync in its local settings. The diagnostics include total duration and per-phase timings without storing card content.
+
+## Event-driven auto sync
+
+When auto sync is enabled, the plugin listens for Logseq database changes instead of scanning the graph on a repeating timer. It waits until Logseq has been quiet for 15 seconds, then resolves and syncs only cards affected by the accumulated changes. A built-in cooldown prevents auto sync from running more than once per minute while edits continue.
+
+Targeted note discovery constrains the existing note-type DataScript queries to the resolved stable block UUIDs before Logseq executes them. It does not enumerate every eligible card and filter the results afterward. The same renderers, hash checks, Anki operations, and asset pipeline are then used for the selected cards.
+
+Changes that arrive during a sync are coalesced into one follow-up run, so they are not lost and cannot create overlapping syncs. Auto sync is still turned off whenever the plugin starts and must be enabled for the current session.
+
+Targeted auto sync depends on an in-memory dependency index produced by a successful **Full Sync**. Turning Auto Sync on runs that Full Sync first and applies its complete reconciliation plan without opening the manual change-selection or deletion-confirmation dialogs. Targeted event processing becomes active only after the reconciliation and index build both succeed. Failing the initialization leaves Auto Sync off. Safely classified changes received during initialization are retained for a targeted follow-up run.
+
+After initialization, if the index is unavailable, an event is unsupported, a deletion cannot be tied to a known card identity, or a global rendering setting changes, auto sync stops and displays **Full sync required** with a reason. It never hides uncertainty by silently starting a full graph scan. A successful Full Sync rebuilds the index and clears this state. Auto Sync is disabled again when the plugin starts, so enabling it in a new Logseq session performs a fresh Full Sync.
+
+### Installed Logseq 2.0.2 DB event contract
+
+The targeted classifier is based on the event bridge shipped by the installed Logseq 2.0.2 build and its bundled `@logseq/libs` 0.3.3 SDK:
+
+- `DB.onChanged` exposes `{ blocks, txData, txMeta }`; the installed DB pipeline additionally sends `deletedBlockUuids`.
+- `blocks` contains complete changed block/page snapshots with stable `uuid` and numeric `id` values. Ordering is represented by `order`; visible sibling positions are not identities.
+- SDK `txData` entries use the five-item DataScript datom form `[entityId, attribute, value, transactionId, added]`. In the installed DB-graph pipeline, `txData` is deliberately an empty array, so targeting primarily uses snapshots, deleted UUIDs, and `txMeta`.
+- Clojure keyword keys are converted to camel case before delivery, so `:outliner-op` arrives as `txMeta.outlinerOp` and `:deleted-block-uuids` arrives as `deletedBlockUuids`.
+- The installed pipeline publishes the hook only when at least one changed block is present and the changed-block count is at most 1,000. Payloads outside the recognized contract are not treated as successful auto syncs.
+
+Each targeted run records its classification, reason, changed entities, affected-card count, duration, and whether Full Sync is required. Deletions are executed only for identities already known by the Full Sync index.
+
+Use **Force Regenerate All Anki Cards** from the command palette, or **Force Regenerate All** from the plugin toolbar menu, when you need to rerender every selected existing card even if its dependency hash still matches. This is useful after renderer, template, or Logseq link behavior changes where the stored hash may otherwise prevent an unchanged card from being sent to Anki. **Full Sync** remains the authoritative graph-wide reconciliation and deletion check.
 
 ## AnkiConnect Port
 

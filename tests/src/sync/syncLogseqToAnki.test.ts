@@ -1,9 +1,10 @@
-import {beforeEach, describe, expect, test, vi} from "vitest";
+import {afterEach, beforeEach, describe, expect, test, vi} from "vitest";
 import type {SyncResult} from "../../../src/sync/types";
 
 const progressNotificationMock = vi.hoisted(() =>
     vi.fn(function ProgressNotification() {
         this.increment = vi.fn();
+        this.setIndeterminate = vi.fn();
         this.updateMessage = vi.fn();
     })
 );
@@ -52,11 +53,33 @@ vi.mock("../../../src/sync/tasks/UpdateNotesTask", () => ({
     })
 }));
 
+import {ClozeNote} from "../../../src/anki-notes/ClozeNote";
+import {HighlightMaskNote} from "../../../src/anki-notes/HighlightMaskNote";
+import {ImageOcclusionNote} from "../../../src/anki-notes/ImageOcclusionNote";
+import {MultilineCardNote} from "../../../src/anki-notes/MultilineCardNote";
+import {SwiftArrowNote} from "../../../src/anki-notes/SwiftArrowNote";
+import {LoggerCategory} from "../../../src/logger";
 import {LogseqProxy} from "../../../src/logseq/LogseqProxy";
 import {LogseqToAnkiSync} from "../../../src/sync/syncLogseqToAnki";
+import {targetedSyncIndex} from "../../../src/sync/targeted/TargetedSyncIndex";
+import type {TargetedChangeBatch} from "../../../src/sync/targeted/types";
+
+const originalLogseq = globalThis.logseq;
+const showMsgMock = vi.fn();
+const updateSettingsMock = vi.fn();
 
 const createNote = {uuid: "create-uuid", type: "cloze", properties: {id: "create-uuid"}};
 const updateNote = {uuid: "update-uuid", type: "cloze", properties: {id: "update-uuid"}};
+const targetedChanges: TargetedChangeBatch = {
+    classification: "targeted",
+    reason: "test event",
+    blocks: [],
+    deletedBlockUuids: [],
+    txAttributes: [],
+    outlinerOps: ["save-block"],
+    changedEntities: [],
+    eventCount: 1
+};
 
 function createSyncResult(changed: boolean): SyncResult {
     return {
@@ -84,11 +107,18 @@ function buildSync(result: SyncResult) {
     sync.setupAnkiModel = vi.fn().mockResolvedValue(undefined);
     sync.initializeAnkiNoteManager = vi.fn().mockResolvedValue({noteInfoMap: new Map()});
     sync.collectAllNotes = vi.fn().mockResolvedValue([]);
+    sync.collectTargetedNotes = vi.fn().mockResolvedValue([]);
     sync.persistLogseqBlockIds = vi.fn().mockResolvedValue(undefined);
     sync.createSyncPlan = vi.fn().mockResolvedValue({
         toCreateNotesOriginal: [createNote],
         toUpdateNotesOriginal: [updateNote],
         toDeleteNotesOriginal: [123]
+    });
+    sync.createTargetedSyncPlan = vi.fn().mockResolvedValue({
+        toCreateNotes: [createNote],
+        toUpdateNotes: [updateNote],
+        toDeleteNotes: [123],
+        skippedDelete: 0
     });
     sync.getUserConfirmation = vi.fn().mockResolvedValue({
         toCreateNotes: [createNote],
@@ -130,22 +160,56 @@ function getStoredLastChangedSyncResult(): SyncResult | undefined {
 describe("LogseqToAnkiSync modes", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.stubGlobal("logseq", {
+            ...originalLogseq,
+            UI: {
+                ...originalLogseq?.UI,
+                showMsg: showMsgMock
+            },
+            provideUI: vi.fn(),
+            baseInfo: {
+                id: "test-plugin"
+            },
+            settings: {debug: [LoggerCategory.SyncMain]},
+            updateSettings: updateSettingsMock
+        });
         LogseqToAnkiSync.isSyncing = false;
+        targetedSyncIndex.replaceAll("Graph", [], []);
         ankiConnectMock.invoke.mockResolvedValue(null);
+    });
+
+    afterEach(() => {
+        targetedSyncIndex.clear();
+        vi.unstubAllGlobals();
     });
 
     test("auto mode does not open the manual selection dialog", async () => {
         const sync = buildSync(createSyncResult(false));
 
-        await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+        await sync.sync({mode: "auto", triggerAnkiWebSync: false, targetedChanges});
 
         expect(sync.getUserConfirmation).not.toHaveBeenCalled();
+    });
+
+    test("auto mode without a classified event refuses to run a full scan", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+
+        expect(outcome.status).toBe("skipped");
+        expect(sync.collectAllNotes).not.toHaveBeenCalled();
+        expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                autoSyncFullSyncRequired: true,
+                autoSyncFullSyncRequiredReason: expect.stringContaining("without a classified")
+            })
+        );
     });
 
     test("auto mode includes deletes", async () => {
         const sync = buildSync(createSyncResult(false));
 
-        await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+        await sync.sync({mode: "auto", triggerAnkiWebSync: false, targetedChanges});
 
         expect(sync.executeSyncPlan).toHaveBeenCalledWith(
             [createNote],
@@ -203,6 +267,50 @@ describe("LogseqToAnkiSync modes", () => {
         );
     });
 
+    test("Auto Sync initialization applies the complete Full Sync plan without confirmation", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        await sync.sync({mode: "manual", fullSyncSelection: "all"});
+
+        expect(sync.getUserConfirmation).not.toHaveBeenCalled();
+        expect(sync.executeSyncPlan).toHaveBeenCalledWith(
+            [createNote],
+            [updateNote],
+            [123],
+            expect.anything(),
+            {
+                autoSync: false,
+                silentProgress: false,
+                skippedDelete: 0
+            }
+        );
+    });
+
+    test("manual mode immediately reports that the sync started", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        await sync.sync();
+
+        expect(showMsgMock).toHaveBeenCalledWith(
+            "Logseq to Anki sync started. Preparing graph scan…",
+            "success",
+            {timeout: 2500}
+        );
+    });
+
+    test("manual mode reports when another sync is already running", async () => {
+        LogseqToAnkiSync.isSyncing = true;
+
+        const outcome = await new LogseqToAnkiSync().sync();
+
+        expect(outcome.status).toBe("already-syncing");
+        expect(showMsgMock).toHaveBeenCalledWith(
+            "A Logseq to Anki sync is already in progress.",
+            "warning",
+            {timeout: 4000}
+        );
+    });
+
     test("manual sync stores duration metadata on the completed result", async () => {
         const sync = buildSync(createSyncResult(false));
 
@@ -213,10 +321,62 @@ describe("LogseqToAnkiSync modes", () => {
         expectSyncTiming(getStoredLastSyncResult(), "manual");
     });
 
+    test("persists phase diagnostics when Sync Main logging is enabled", async () => {
+        const sync = buildSync(createSyncResult(false));
+
+        await sync.sync();
+
+        const diagnosticsUpdate = updateSettingsMock.mock.calls.find(
+            ([settings]) => settings.lastSyncDiagnostics
+        )?.[0];
+        const diagnostics = JSON.parse(diagnosticsUpdate.lastSyncDiagnostics);
+        expect(diagnostics).toMatchObject({
+            schemaVersion: 1,
+            pluginVersion: expect.any(String),
+            graphName: "Graph",
+            mode: "manual",
+            durationMs: expect.any(Number),
+            collectedNoteCount: 0
+        });
+        expect(diagnostics.phases).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    phase: "collect Logseq notes",
+                    durationMs: expect.any(Number),
+                    status: "completed"
+                }),
+                expect.objectContaining({
+                    phase: "execute sync plan",
+                    durationMs: expect.any(Number),
+                    status: "completed"
+                })
+            ])
+        );
+    });
+
+    test("successful Full Sync clears the Full sync required state", async () => {
+        (globalThis.logseq.settings as any).autoSyncFullSyncRequired = true;
+        (globalThis.logseq.settings as any).autoSyncFullSyncRequiredReason = "Unknown event";
+        const sync = buildSync(createSyncResult(false));
+
+        const outcome = await sync.sync();
+
+        expect(outcome.status).toBe("completed");
+        expect(updateSettingsMock).toHaveBeenCalledWith({
+            autoSyncFullSyncRequired: false,
+            autoSyncFullSyncRequiredReason: ""
+        });
+        expect(targetedSyncIndex.isReadyForGraph("Graph")).toBe(true);
+    });
+
     test("auto no-change sync still stores last sync details with duration metadata", async () => {
         const sync = buildSync(createSyncResult(false));
 
-        const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+        const outcome = await sync.sync({
+            mode: "auto",
+            triggerAnkiWebSync: false,
+            targetedChanges
+        });
 
         expect(outcome.status).toBe("completed");
         expectSyncTiming(outcome.result, "auto");
@@ -230,7 +390,11 @@ describe("LogseqToAnkiSync modes", () => {
     test("changed sync stores last changed sync details with duration metadata", async () => {
         const sync = buildSync(createSyncResult(true));
 
-        const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+        const outcome = await sync.sync({
+            mode: "auto",
+            triggerAnkiWebSync: false,
+            targetedChanges
+        });
 
         expect(outcome.status).toBe("completed");
         expectSyncTiming(outcome.result, "auto");
@@ -258,7 +422,11 @@ describe("LogseqToAnkiSync modes", () => {
         });
 
         try {
-            const outcome = await sync.sync({mode: "auto", triggerAnkiWebSync: false});
+            const outcome = await sync.sync({
+                mode: "auto",
+                triggerAnkiWebSync: false,
+                targetedChanges
+            });
 
             expect(outcome.status).toBe("skipped");
             expect(showMsg).toHaveBeenCalledWith(
@@ -274,7 +442,7 @@ describe("LogseqToAnkiSync modes", () => {
     test("AnkiWeb sync runs after auto mode changes", async () => {
         const sync = buildSync(createSyncResult(true));
 
-        await sync.sync({mode: "auto", triggerAnkiWebSync: true});
+        await sync.sync({mode: "auto", triggerAnkiWebSync: true, targetedChanges});
 
         expect(ankiConnectMock.invoke).toHaveBeenCalledWith("sync", {});
     });
@@ -282,7 +450,7 @@ describe("LogseqToAnkiSync modes", () => {
     test("AnkiWeb sync is skipped when auto mode finds no changes", async () => {
         const sync = buildSync(createSyncResult(false));
 
-        await sync.sync({mode: "auto", triggerAnkiWebSync: true});
+        await sync.sync({mode: "auto", triggerAnkiWebSync: true, targetedChanges});
 
         expect(ankiConnectMock.invoke).not.toHaveBeenCalledWith("sync", {});
     });
@@ -331,6 +499,184 @@ describe("LogseqToAnkiSync sync planning", () => {
         expect(result.toCreateNotesOriginal).toEqual([]);
         expect(result.toUpdateNotesOriginal).toHaveLength(5000);
         expect(result.toDeleteNotesOriginal).toEqual([9999]);
+    });
+
+    test("targeted planning deletes a known card by exact indexed identity", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        targetedSyncIndex.replaceAll(
+            "Graph",
+            [
+                {
+                    identity: "deleted-cloze",
+                    rootUuid: "deleted",
+                    type: "cloze",
+                    pageId: 1,
+                    directBlockUuids: ["deleted"],
+                    ancestorBlockUuids: [],
+                    pageEntityKeys: [],
+                    tagEntityKeys: []
+                }
+            ],
+            []
+        );
+        const manager = {getAnkiIdByUuidType: vi.fn(() => 42)};
+
+        const result = await sync.createTargetedSyncPlan(
+            [],
+            {
+                classification: "targeted",
+                reason: "known delete",
+                affectedIdentities: new Set(["deleted-cloze"]),
+                candidateRootUuids: new Set(["deleted"]),
+                explicitlyDeletedRootUuids: new Set(["deleted"])
+            },
+            manager
+        );
+
+        expect(result).toMatchObject({toDeleteNotes: [42], skippedDelete: 0});
+        expect(manager.getAnkiIdByUuidType).toHaveBeenCalledWith("deleted-cloze");
+        targetedSyncIndex.clear();
+    });
+
+    test("targeted planning permits eligibility removal while the root still exists", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        targetedSyncIndex.replaceAll(
+            "Graph",
+            [
+                {
+                    identity: "untagged-multiline_card",
+                    rootUuid: "untagged",
+                    type: "multiline_card",
+                    pageId: 1,
+                    directBlockUuids: ["untagged"],
+                    ancestorBlockUuids: [],
+                    pageEntityKeys: [],
+                    tagEntityKeys: []
+                }
+            ],
+            []
+        );
+        const getBlock = vi
+            .spyOn(LogseqProxy.Editor, "getBlock")
+            .mockResolvedValue({id: 1, uuid: "untagged"} as any);
+
+        try {
+            const result = await sync.createTargetedSyncPlan(
+                [],
+                {
+                    classification: "targeted",
+                    reason: "card tag removed",
+                    affectedIdentities: new Set(["untagged-multiline_card"]),
+                    candidateRootUuids: new Set(["untagged"]),
+                    explicitlyDeletedRootUuids: new Set()
+                },
+                {getAnkiIdByUuidType: vi.fn(() => 43)}
+            );
+            expect(result.toDeleteNotes).toEqual([43]);
+            expect(result.ambiguousReason).toBeUndefined();
+        } finally {
+            getBlock.mockRestore();
+            targetedSyncIndex.clear();
+        }
+    });
+
+    test("targeted planning refuses ambiguous disappearance instead of deleting", async () => {
+        const sync = new LogseqToAnkiSync() as any;
+        targetedSyncIndex.replaceAll(
+            "Graph",
+            [
+                {
+                    identity: "missing-cloze",
+                    rootUuid: "missing",
+                    type: "cloze",
+                    pageId: 1,
+                    directBlockUuids: ["missing"],
+                    ancestorBlockUuids: [],
+                    pageEntityKeys: [],
+                    tagEntityKeys: []
+                }
+            ],
+            []
+        );
+        const getBlock = vi.spyOn(LogseqProxy.Editor, "getBlock").mockResolvedValue(null);
+
+        try {
+            const result = await sync.createTargetedSyncPlan(
+                [],
+                {
+                    classification: "targeted",
+                    reason: "ambiguous",
+                    affectedIdentities: new Set(["missing-cloze"]),
+                    candidateRootUuids: new Set(["missing"]),
+                    explicitlyDeletedRootUuids: new Set()
+                },
+                {getAnkiIdByUuidType: vi.fn(() => 44)}
+            );
+            expect(result.toDeleteNotes).toEqual([]);
+            expect(result.ambiguousReason).toContain("stable deletion identity");
+        } finally {
+            getBlock.mockRestore();
+            targetedSyncIndex.clear();
+        }
+    });
+});
+
+describe("LogseqToAnkiSync note collection progress", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    test("keeps scanning visible until note ordering completes", async () => {
+        const notesByType = {
+            cloze: {uuid: "cloze", type: "cloze"},
+            swiftArrow: {uuid: "swift", type: "swift_arrow"},
+            imageOcclusion: {uuid: "image", type: "image_occlusion"},
+            highlightMask: {uuid: "highlight", type: "highlight_mask"},
+            multiline: {uuid: "multiline", type: "multiline_card"}
+        };
+        vi.spyOn(ClozeNote, "getNotesFromLogseqBlocks").mockResolvedValue([
+            notesByType.cloze as any
+        ]);
+        vi.spyOn(SwiftArrowNote, "getNotesFromLogseqBlocks").mockResolvedValue([
+            notesByType.swiftArrow as any
+        ]);
+        vi.spyOn(ImageOcclusionNote, "getNotesFromLogseqBlocks").mockResolvedValue([
+            notesByType.imageOcclusion as any
+        ]);
+        vi.spyOn(HighlightMaskNote, "getNotesFromLogseqBlocks").mockResolvedValue([
+            notesByType.highlightMask as any
+        ]);
+        vi.spyOn(MultilineCardNote, "getNotesFromLogseqBlocks").mockResolvedValue([
+            notesByType.multiline as any
+        ]);
+        vi.spyOn(LogseqProxy.Editor, "getBlock").mockImplementation(
+            async (uuid: any) =>
+                ({
+                    id: String(uuid).length,
+                    uuid
+                }) as any
+        );
+
+        const sync = new LogseqToAnkiSync() as any;
+        sync.graphName = "Graph";
+        const notes = await sync.collectAllNotes(false);
+
+        const progressNotification = progressNotificationMock.mock.instances.at(-1) as any;
+        expect(progressNotificationMock).toHaveBeenLastCalledWith(
+            expect.stringContaining("Scanning Logseq Graph"),
+            6,
+            "graph",
+            {silent: false}
+        );
+        expect(progressNotification.increment).toHaveBeenCalledTimes(6);
+        expect(progressNotification.setIndeterminate).toHaveBeenCalledTimes(5);
+        expect(progressNotification.updateMessage).toHaveBeenCalledWith(
+            "Scanning Graph: loading multiline card trees"
+        );
+        expect(progressNotification.updateMessage).toHaveBeenCalledWith(
+            "Scanning Graph: ordering 5 notes"
+        );
+        expect(notes).toHaveLength(5);
     });
 });
 

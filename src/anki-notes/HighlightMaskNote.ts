@@ -3,6 +3,7 @@ import "@logseq/libs";
 import type {BlockEntity, BlockUUID} from "@logseq/libs/dist/LSPlugin";
 import _ from "lodash";
 import {createLogger, LoggerCategory} from "../logger";
+import createBlockUuidFilterClause from "../logseq/createBlockUuidFilterClause";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqContentPreprocessor} from "../logseq/LogseqContentPreprocessor";
 import {LogseqPropertiesHelper} from "../logseq/LogseqPropertiesHelper";
@@ -185,7 +186,9 @@ export class HighlightMaskNote extends Note {
         );
     }
 
-    public static async getNotesFromLogseqBlocks(): Promise<HighlightMaskNote[]> {
+    public static async getNotesFromLogseqBlocks(
+        candidateRootUuids?: ReadonlySet<string>
+    ): Promise<HighlightMaskNote[]> {
         // Only works for DB graphs
         const isDbGraph = await LogseqProxy.App.checkCurrentIsDbGraph();
         if (!isDbGraph) {
@@ -193,12 +196,14 @@ export class HighlightMaskNote extends Note {
         }
 
         type DatascriptQueryResult = [] | [{uuid: BlockUUID; page: {id: number}}][];
+        const candidateFilter = createBlockUuidFilterClause(candidateRootUuids);
 
         // Query blocks with highlight_mask property in DB graph
         const blocks: DatascriptQueryResult = await LogseqProxy.DB.datascriptQuery(
             `
             [:find (pull ?b [:block/uuid :block/page])
              :where
+               ${candidateFilter}
                [?prop-e :block/tags :logseq.class/Property]
                [?prop-e :db/ident ?prop]
                [(name ?prop) ?prop-name]
@@ -208,8 +213,12 @@ export class HighlightMaskNote extends Note {
             {suppressErrors: false}
         );
 
+        const candidateBlocks = (blocks || []).filter((block) => {
+            const uuid = getUUIDFromBlock(block[0]).toLowerCase();
+            return candidateRootUuids == null || candidateRootUuids.has(uuid);
+        });
         const notes: (HighlightMaskNote | false)[] = await Promise.all(
-            (blocks || []).map(async (b) => {
+            candidateBlocks.map(async (b) => {
                 const uuid = getUUIDFromBlock(b[0]);
                 if (!uuid) return false;
                 const pageId = _.get(b[0], "page.id");

@@ -2,8 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Theme variables will be set dynamically by UI.loadThemeVariables() */
-/* No defaults needed - Logseq provides all theme variables */
+/* Theme variables and Logseq-compatible fallbacks are set by UI.loadThemeVariables(). */
 
 body {
     padding: 0;

@@ -57,6 +57,15 @@ export class TagParser {
     }
 
     private static normalizeTags(tags: string[]): string[] {
+        const invalidTagIndex = tags.findIndex((tag) => typeof tag !== "string");
+        if (invalidTagIndex !== -1) {
+            const invalidTag = tags[invalidTagIndex];
+            const invalidTagType = invalidTag === null ? "null" : typeof invalidTag;
+            throw new TypeError(
+                `[TagParser] Expected every tag to be a string, but tag at index ${invalidTagIndex} was ${invalidTagType}.`
+            );
+        }
+
         return tags.map((tag) => tag.replace(/\//g, "::")).map((tag) => tag.replace(/\s/g, "_"));
     }
 

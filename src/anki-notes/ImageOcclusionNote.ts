@@ -9,6 +9,7 @@ import {
     MD_IMAGE_EMBEDED_REGEXP
 } from "../constants";
 import {createLogger, LoggerCategory} from "../logger";
+import createBlockUuidFilterClause from "../logseq/createBlockUuidFilterClause";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqAppInfoFetcher} from "../logseq/LogseqAppInfoFetcher";
 import {LogseqContentPreprocessor} from "../logseq/LogseqContentPreprocessor";
@@ -193,14 +194,18 @@ export class ImageOcclusionNote extends Note {
         );
     }
 
-    public static async getNotesFromLogseqBlocks(): Promise<ImageOcclusionNote[]> {
+    public static async getNotesFromLogseqBlocks(
+        candidateRootUuids?: ReadonlySet<string>
+    ): Promise<ImageOcclusionNote[]> {
         type DatascriptQueryResult = [] | [{uuid: BlockUUID; page: {id: number}}][];
+        const candidateFilter = createBlockUuidFilterClause(candidateRootUuids);
         let blocks: DatascriptQueryResult = [];
         if (!(await LogseqProxy.App.checkCurrentIsDbGraph())) {
             blocks = await LogseqProxy.DB.datascriptQuery(
                 `
                 [:find (pull ?b [:block/uuid :block/page])
                 :where
+                  ${candidateFilter}
                   [?b :block/properties ?p]
                   [(get ?p :occlusion)]
                 ]`,
@@ -211,6 +216,7 @@ export class ImageOcclusionNote extends Note {
                 `
                 [:find (pull ?b [:block/uuid :block/page])
                 :where
+                  ${candidateFilter}
                   [?prop-e :block/tags :logseq.class/Property]
                   [?prop-e :db/ident ?prop]
                   [(name ?prop) ?prop-name]
@@ -222,8 +228,12 @@ export class ImageOcclusionNote extends Note {
                 {suppressErrors: false}
             );
         }
+        const candidateBlocks = (blocks || []).filter((block) => {
+            const uuid = getUUIDFromBlock(block[0]).toLowerCase();
+            return candidateRootUuids == null || candidateRootUuids.has(uuid);
+        });
         let notes: (ImageOcclusionNote | false)[] = await Promise.all(
-            (blocks || []).map(async (b) => {
+            candidateBlocks.map(async (b) => {
                 const uuid = getUUIDFromBlock(b[0]);
                 const pageId = _.get(b[0], "page.id");
                 if (!pageId) return null;

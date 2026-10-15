@@ -32,6 +32,7 @@ import type {
     OcclusionElement
 } from "../launchers/showOcclusionEditor";
 import React, {useCallback, useState} from "../React";
+import {createOpaqueSurfaceStyle} from "../styles/opaqueSurface";
 import {UI} from "../UI";
 
 const logger = createLogger(LoggerCategory.Others);
@@ -993,13 +994,16 @@ export const OcclusionEditorComponent: React.FC<{
                             content={
                                 <div
                                     style={{
+                                        ...createOpaqueSurfaceStyle(
+                                            "--ls-popover-background-color",
+                                            "--ls-primary-background-color"
+                                        ),
                                         boxShadow:
                                             "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
                                         borderRadius: "0.25rem",
                                         overflow: "hidden",
                                         margin: 0,
                                         padding: "10px",
-                                        backgroundColor: "var(--ls-primary-background-color)",
                                         width: "240px"
                                     }}>
                                     <LogseqCheckbox

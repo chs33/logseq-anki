@@ -3,6 +3,7 @@ import "@logseq/libs";
 import type {BlockUUID} from "@logseq/libs/dist/LSPlugin.user";
 import _ from "lodash";
 import {LOGSEQ_CLOZE_NOTE_BLOCK_REGEXP, LOGSEQ_PLUGIN_CLOZE_REGEXP} from "../constants";
+import createBlockUuidFilterClause from "../logseq/createBlockUuidFilterClause";
 import type {DependencyEntity} from "../logseq/getLogseqContentDirectDependencies";
 import getUUIDFromBlock from "../logseq/getUUIDFromBlock";
 import {LogseqContentPreprocessor} from "../logseq/LogseqContentPreprocessor";
@@ -557,14 +558,18 @@ export class ClozeNote extends Note {
         );
     }
 
-    public static async getNotesFromLogseqBlocks(): Promise<ClozeNote[]> {
+    public static async getNotesFromLogseqBlocks(
+        candidateRootUuids?: ReadonlySet<string>
+    ): Promise<ClozeNote[]> {
         type DatascriptQueryResult = [] | [{uuid: BlockUUID; page: {id: number}}][];
+        const candidateFilter = createBlockUuidFilterClause(candidateRootUuids);
         // Get blocks with Anki or Logseq cloze macro syntax
         const clozePattern = LOGSEQ_CLOZE_NOTE_BLOCK_REGEXP.source.replace(/\\/g, "\\\\");
         const macroCloze_blocks: DatascriptQueryResult = await LogseqProxy.DB.datascriptQuery(
             `
         [:find (pull ?b [:block/uuid :block/page])                                                                                                                    
          :where                                                                                                                                                       
+         ${candidateFilter}
          [(re-pattern "${clozePattern}") ?regex]                                                                                                                      
          (or                                                                                                                                                          
            (and [?b :block/content ?content]                                                                                                                          
@@ -581,6 +586,7 @@ export class ClozeNote extends Note {
                 `
                 [:find (pull ?b [:block/uuid :block/page])
                 :where
+                  ${candidateFilter}
                   [?b :block/properties ?p]
                   [(get ?p :replacecloze)]
                 ]`,
@@ -590,6 +596,7 @@ export class ClozeNote extends Note {
                 `
             [:find (pull ?b [:block/uuid :block/page])                                                                                                                
              :where                                                                                                                                                   
+             ${candidateFilter}
              [(re-pattern "#\\\\+BEGIN_(CLOZE)( .*)?\\\\n((.|\\\\n)*?)#\\\\+END_\\\\1") ?regex]                                                                       
              (or                                                                                                                                                      
                (and [?b :block/content ?content]                                                                                                                      
@@ -604,7 +611,10 @@ export class ClozeNote extends Note {
             ...(macroCloze_blocks || []),
             ...(replaceCloze_blocks || []),
             ...(orgCloze_blocks || [])
-        ];
+        ].filter((block) => {
+            const uuid = getUUIDFromBlock(block[0]).toLowerCase();
+            return candidateRootUuids == null || candidateRootUuids.has(uuid);
+        });
         let notes = await Promise.all(
             blocks.map(async (b) => {
                 const uuid = getUUIDFromBlock(b[0]);

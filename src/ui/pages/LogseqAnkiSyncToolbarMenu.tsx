@@ -1,3 +1,4 @@
+import ALERT_TRIANGLE_ICON from "@tabler/icons/outline/alert-triangle.svg?raw";
 import BOOK_ICON from "@tabler/icons/outline/book.svg?raw";
 import HEART_ICON from "@tabler/icons/outline/heart.svg?raw";
 import LOGS_ICON from "@tabler/icons/outline/logs.svg?raw";
@@ -14,6 +15,7 @@ import {showSyncResultDialog} from "../launchers/showSyncResultDialog";
 import type {FC} from "../React";
 // biome-ignore lint/correctness/noUnusedImports: required by the TypeScript JSX transform
 import React, {useEffect, useState} from "../React";
+import {createOpaqueSurfaceStyle} from "../styles/opaqueSurface";
 import {UI} from "../UI";
 
 const focusTrapOptions = {
@@ -38,6 +40,10 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
     const [autoSyncEnabled, setAutoSyncEnabled] = useState(
         LogseqProxy.Settings.getPluginSettings().autoSyncEnabled === true
     );
+    const settings = LogseqProxy.Settings.getPluginSettings();
+    const fullSyncRequired = settings.autoSyncFullSyncRequired === true;
+    const fullSyncRequiredReason =
+        settings.autoSyncFullSyncRequiredReason || "A change could not be safely targeted.";
 
     useEffect(() => {
         setIsVisible(true);
@@ -62,14 +68,16 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
         const nextAutoSyncEnabled = !autoSyncEnabled;
         setAutoSyncEnabled(nextAutoSyncEnabled);
         logseq.updateSettings({autoSyncEnabled: nextAutoSyncEnabled});
-        logseq.UI.showMsg(`Auto sync ${nextAutoSyncEnabled ? "enabled" : "disabled"}.`, "success");
+        if (!nextAutoSyncEnabled) {
+            logseq.UI.showMsg("Auto sync disabled.", "success");
+        }
     };
 
     const items = [
         {
-            key: "start-sync",
+            key: "full-sync",
             icon: PLAYER_PLAY_ICON,
-            text: "Start Sync",
+            text: "Full Sync",
             color: "text-green-500",
             onClick: async () => {
                 await new LogseqToAnkiSync().sync();
@@ -90,9 +98,20 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
             text: `Auto Sync: ${autoSyncEnabled ? "On" : "Off"}`,
             color: autoSyncEnabled ? "text-green-500" : "opacity-70",
             checked: autoSyncEnabled,
-            keepOpen: true,
+            keepOpen: false,
             onClick: toggleAutoSync
         },
+        ...(fullSyncRequired
+            ? [
+                  {
+                      key: "full-sync-required",
+                      icon: ALERT_TRIANGLE_ICON,
+                      text: `Full sync required: ${fullSyncRequiredReason}`,
+                      color: "text-orange-500",
+                      disabled: true
+                  }
+              ]
+            : []),
         {
             key: "last-sync-details",
             icon: LOGS_ICON,
@@ -240,10 +259,13 @@ const LogseqAnkiSyncToolbarMenuComponent: FC<ToolbarMenuModalProps> = ({
                 <div
                     className={`ui__dropdown-menu-content z-50 min-w-[12rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md transition-all duration-150 ${isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"}`}
                     style={{
+                        ...createOpaqueSurfaceStyle(
+                            "--ls-popover-background-color",
+                            "--ls-primary-background-color"
+                        ),
                         position: "absolute",
                         right: rightPos,
                         top: topPos,
-                        backgroundColor: "var(--ls-primary-background-color, #fff)",
                         borderColor: "var(--ls-border-color, #eee)",
                         color: "var(--ls-primary-text-color, #000)",
                         transformOrigin: "top right"

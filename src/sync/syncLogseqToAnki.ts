@@ -34,6 +34,14 @@ import {
     sortAsync
 } from "../utils/utils";
 import {NoteHashCalculator} from "./cache";
+import {TargetedAutoSyncState} from "./targeted/TargetedAutoSyncState";
+import {buildTargetedNoteRecords, targetedSyncIndex} from "./targeted/TargetedSyncIndex";
+import {resolveTargetedChanges} from "./targeted/TargetedSyncResolver";
+import type {
+    TargetedChangeBatch,
+    TargetedResolution,
+    TargetedSyncDiagnostics
+} from "./targeted/types";
 import {CreateNotesTask} from "./tasks/CreateNotesTask";
 import {DeleteNotesTask} from "./tasks/DeleteNotesTask";
 import {SuspendUnsuspendNotesTask} from "./tasks/SuspendUnsuspendNotesTask";
@@ -46,6 +54,8 @@ export interface LogseqToAnkiSyncOptions {
     mode?: "manual" | "auto";
     triggerAnkiWebSync?: boolean;
     forceRegenerate?: boolean;
+    targetedChanges?: TargetedChangeBatch;
+    fullSyncSelection?: "interactive" | "all";
 }
 
 export interface LogseqToAnkiSyncOutcome {
@@ -62,11 +72,28 @@ interface ExecuteSyncPlanOptions {
     forceRegenerate?: boolean;
 }
 
+interface SyncPhaseTiming {
+    phase: string;
+    startedAt: string;
+    durationMs: number;
+    status: "completed" | "failed";
+}
+
+interface TargetedSyncPlan {
+    toCreateNotes: Note[];
+    toUpdateNotes: Note[];
+    toDeleteNotes: number[];
+    skippedDelete: number;
+    ambiguousReason?: string;
+}
+
 export class LogseqToAnkiSync {
     static isSyncing: boolean;
     graphName: string;
     logseqLinkGraphName: string;
     modelName: string;
+    private syncPhaseTimings: SyncPhaseTiming[] = [];
+    private collectedNoteCount = 0;
 
     public async sync(options: LogseqToAnkiSyncOptions = {}): Promise<LogseqToAnkiSyncOutcome> {
         const syncOptions = {mode: "manual" as const, ...options};
@@ -86,14 +113,35 @@ export class LogseqToAnkiSync {
         }
         if (LogseqToAnkiSync.isSyncing) {
             logger.info("Syncing already in process");
+            if (syncOptions.mode === "manual") {
+                await logseq.UI.showMsg(
+                    "A Logseq to Anki sync is already in progress.",
+                    "warning",
+                    {
+                        timeout: 4000
+                    }
+                );
+            }
             return {status: "already-syncing", changed: false};
         }
         LogseqToAnkiSync.isSyncing = true;
         try {
+            if (syncOptions.mode === "manual") {
+                await logseq.UI.showMsg(
+                    "Logseq to Anki sync started. Preparing graph scan…",
+                    "success",
+                    {
+                        timeout: 2500
+                    }
+                );
+            }
             return await this.performSync(syncOptions);
         } catch (e) {
             const errorMessage = e?.toString?.() ?? String(e);
             if (syncOptions.mode === "auto") {
+                if (syncOptions.targetedChanges) {
+                    this.recordTargetedFailure(syncOptions.targetedChanges, errorMessage);
+                }
                 const readableErrorMessage = getReadableAnkiErrorMessage(errorMessage, {
                     ankiConnectUrl: AnkiConnect.getAnkiConnectUrl()
                 });
@@ -131,9 +179,20 @@ export class LogseqToAnkiSync {
     private async performSync(
         options: Required<Pick<LogseqToAnkiSyncOptions, "mode">> & LogseqToAnkiSyncOptions
     ): Promise<LogseqToAnkiSyncOutcome> {
+        if (options.mode === "auto") {
+            if (!options.targetedChanges) {
+                const reason = "Auto Sync was invoked without a classified Logseq DB change.";
+                TargetedAutoSyncState.markFullSyncRequired(reason);
+                return {status: "skipped", changed: false};
+            }
+            return await this.performTargetedSync(options, options.targetedChanges);
+        }
+
         const syncStartedAtMs = Date.now();
         const syncStartedAt = new Date(syncStartedAtMs).toISOString();
-        const isAutoSync = options.mode === "auto";
+        this.syncPhaseTimings = [];
+        this.collectedNoteCount = 0;
+        const isAutoSync = false;
         this.graphName = await this.getGraphName();
         this.logseqLinkGraphName = await this.getLogseqLinkGraphName();
         this.modelName = this.getModelName();
@@ -147,45 +206,85 @@ export class LogseqToAnkiSync {
         const notes = await this.measureSyncPhase("collect Logseq notes", () =>
             this.collectAllNotes(isAutoSync)
         );
-        await this.persistLogseqBlockIds(notes);
+        this.collectedNoteCount = notes.length;
+        await this.measureSyncPhase("persist Logseq block IDs", () =>
+            this.persistLogseqBlockIds(notes)
+        );
 
         const syncPlan = await this.measureSyncPhase("create sync plan", () =>
             this.createSyncPlan(notes, ankiNoteManager)
         );
         const {toCreateNotesOriginal, toUpdateNotesOriginal, toDeleteNotesOriginal} = syncPlan;
 
-        const confirmation = isAutoSync
-            ? this.getAutoSelection(
-                  toCreateNotesOriginal,
-                  toUpdateNotesOriginal,
-                  toDeleteNotesOriginal
-              )
-            : await this.getUserConfirmation(
-                  toCreateNotesOriginal,
-                  toUpdateNotesOriginal,
-                  toDeleteNotesOriginal,
-                  notes
-              );
+        const confirmation = await this.measureSyncPhase("select sync changes", async () =>
+            options.fullSyncSelection === "all"
+                ? this.selectAllSyncChanges(
+                      toCreateNotesOriginal,
+                      toUpdateNotesOriginal,
+                      toDeleteNotesOriginal
+                  )
+                : await this.getUserConfirmation(
+                      toCreateNotesOriginal,
+                      toUpdateNotesOriginal,
+                      toDeleteNotesOriginal,
+                      notes
+                  )
+        );
 
         if (!confirmation) return {status: "cancelled", changed: false};
 
         const {toCreateNotes, toUpdateNotes, toDeleteNotes} = confirmation;
-        const syncResult = await this.executeSyncPlan(
-            toCreateNotes,
-            toUpdateNotes,
-            toDeleteNotes,
-            ankiNoteManager,
-            {
+        const syncResult = await this.measureSyncPhase("execute sync plan", () =>
+            this.executeSyncPlan(toCreateNotes, toUpdateNotes, toDeleteNotes, ankiNoteManager, {
                 autoSync: isAutoSync,
                 silentProgress: isAutoSync,
                 skippedDelete: 0,
                 ...(options.forceRegenerate === true ? {forceRegenerate: true} : {})
-            }
+            })
         );
 
-        await this.performPostSyncCleanup(syncResult.toCreateNotes);
-        await this.performAnkiWebSyncIfNeeded(syncResult, options);
+        await this.measureSyncPhase("post-sync cleanup", () =>
+            this.performPostSyncCleanup(syncResult.toCreateNotes)
+        );
+        await this.measureSyncPhase("AnkiWeb sync", () =>
+            this.performAnkiWebSyncIfNeeded(syncResult, options)
+        );
+
+        const hasFailures = this.hasSyncFailures(syncResult);
+        const completedFullSelection =
+            toCreateNotes.length === toCreateNotesOriginal.length &&
+            toUpdateNotes.length === toUpdateNotesOriginal.length &&
+            toDeleteNotes.length === toDeleteNotesOriginal.length;
+        if (!hasFailures && completedFullSelection) {
+            try {
+                const targetedRecords = await this.measureSyncPhase(
+                    "build targeted auto-sync index",
+                    () => buildTargetedNoteRecords(notes)
+                );
+                targetedSyncIndex.replaceAll(
+                    this.graphName,
+                    targetedRecords.records,
+                    targetedRecords.snapshots
+                );
+                TargetedAutoSyncState.clearAfterSuccessfulFullSync();
+            } catch (error) {
+                const reason = `Full Sync completed, but its targeted dependency index could not be built: ${
+                    error instanceof Error ? error.message : String(error)
+                }`;
+                logger.error(reason, error);
+                TargetedAutoSyncState.markFullSyncRequired(reason);
+            }
+        } else if (hasFailures) {
+            TargetedAutoSyncState.markFullSyncRequired(
+                "Full Sync completed with failed Anki operations. Resolve them and run Full Sync again."
+            );
+        } else {
+            TargetedAutoSyncState.markFullSyncRequired(
+                "Full Sync did not reconcile every discovered change because some changes were deselected."
+            );
+        }
         this.attachSyncTiming(syncResult, options.mode, syncStartedAtMs, syncStartedAt);
+        this.persistSyncDiagnostics(syncResult);
 
         WindowParentBridge.dispatchLogseqAnkiSyncEvent("syncLogseqToAnkiComplete");
         WindowParentBridge.setGlobalObject("lastSyncLogseqToAnkiResult", syncResult);
@@ -201,6 +300,305 @@ export class LogseqToAnkiSync {
         return {status: "completed", changed: syncResult.changed, result: syncResult};
     }
 
+    private async performTargetedSync(
+        options: Required<Pick<LogseqToAnkiSyncOptions, "mode">> & LogseqToAnkiSyncOptions,
+        changes: TargetedChangeBatch
+    ): Promise<LogseqToAnkiSyncOutcome> {
+        const syncStartedAtMs = Date.now();
+        const syncStartedAt = new Date(syncStartedAtMs).toISOString();
+        this.syncPhaseTimings = [];
+        this.collectedNoteCount = 0;
+        this.graphName = await this.getGraphName();
+        this.logseqLinkGraphName = await this.getLogseqLinkGraphName();
+        this.modelName = this.getModelName();
+
+        if (TargetedAutoSyncState.isFullSyncRequired()) {
+            return this.skipTargetedSync(
+                changes,
+                TargetedAutoSyncState.getFullSyncRequiredReason() ||
+                    "A previous change requires Full Sync.",
+                syncStartedAtMs,
+                syncStartedAt
+            );
+        }
+        if (!targetedSyncIndex.isReadyForGraph(this.graphName)) {
+            return this.skipTargetedSync(
+                changes,
+                "The targeted dependency index is unavailable for this graph. Run Full Sync once.",
+                syncStartedAtMs,
+                syncStartedAt
+            );
+        }
+
+        logger.success(
+            `Starting targeted Logseq to Anki Auto Sync V${pkg.version} for graph ${this.graphName}`
+        );
+        const resolution = await this.measureSyncPhase("resolve targeted changes", () =>
+            resolveTargetedChanges(changes, targetedSyncIndex)
+        );
+        if (resolution.classification !== "targeted") {
+            return this.skipTargetedSync(
+                changes,
+                resolution.reason,
+                syncStartedAtMs,
+                syncStartedAt,
+                resolution.affectedIdentities.size
+            );
+        }
+
+        await this.measureSyncPhase("setup Anki model", () => this.setupAnkiModel());
+        const ankiNoteManager = await this.measureSyncPhase("initialize Anki cache", () =>
+            this.initializeAnkiNoteManager()
+        );
+        const notes = await this.measureSyncPhase("collect targeted Logseq notes", () =>
+            this.collectTargetedNotes(resolution.candidateRootUuids)
+        );
+        this.collectedNoteCount = notes.length;
+        await this.measureSyncPhase("persist targeted Logseq block IDs", () =>
+            this.persistLogseqBlockIds(notes)
+        );
+
+        const plan = await this.measureSyncPhase("create targeted sync plan", () =>
+            this.createTargetedSyncPlan(notes, resolution, ankiNoteManager)
+        );
+        const affectedCardCount =
+            plan.toCreateNotes.length + plan.toUpdateNotes.length + plan.toDeleteNotes.length;
+        if (plan.ambiguousReason) {
+            return this.skipTargetedSync(
+                changes,
+                plan.ambiguousReason,
+                syncStartedAtMs,
+                syncStartedAt,
+                affectedCardCount
+            );
+        }
+
+        const syncResult = await this.measureSyncPhase("execute targeted sync plan", () =>
+            this.executeSyncPlan(
+                plan.toCreateNotes,
+                plan.toUpdateNotes,
+                plan.toDeleteNotes,
+                ankiNoteManager,
+                {
+                    autoSync: true,
+                    silentProgress: true,
+                    skippedDelete: plan.skippedDelete
+                }
+            )
+        );
+        await this.measureSyncPhase("post-sync cleanup", () =>
+            this.performPostSyncCleanup(syncResult.toCreateNotes)
+        );
+        await this.measureSyncPhase("AnkiWeb sync", () =>
+            this.performAnkiWebSyncIfNeeded(syncResult, options)
+        );
+
+        if (this.hasSyncFailures(syncResult)) {
+            return this.finishFailedTargetedSync(
+                changes,
+                syncResult,
+                "Targeted Auto Sync completed with failed Anki operations.",
+                syncStartedAtMs,
+                syncStartedAt,
+                affectedCardCount
+            );
+        }
+
+        const targetedRecords = await this.measureSyncPhase(
+            "refresh targeted dependency index",
+            () => buildTargetedNoteRecords(notes)
+        );
+        targetedSyncIndex.replaceRoots(
+            resolution.candidateRootUuids,
+            targetedRecords.records,
+            targetedRecords.snapshots
+        );
+
+        this.attachSyncTiming(syncResult, "auto", syncStartedAtMs, syncStartedAt);
+        this.persistSyncDiagnostics(syncResult);
+        this.recordTargetedDiagnostics(
+            changes,
+            "targeted",
+            resolution.reason,
+            affectedCardCount,
+            syncStartedAtMs,
+            syncStartedAt,
+            false
+        );
+        WindowParentBridge.dispatchLogseqAnkiSyncEvent("syncLogseqToAnkiComplete");
+        WindowParentBridge.setGlobalObject("lastSyncLogseqToAnkiResult", syncResult);
+        if (syncResult.changed) {
+            WindowParentBridge.setGlobalObject("lastChangedSyncLogseqToAnkiResult", syncResult);
+        }
+        this.displayAutoResults(syncResult);
+        return {status: "completed", changed: syncResult.changed, result: syncResult};
+    }
+
+    private async collectTargetedNotes(candidateRootUuids: ReadonlySet<string>): Promise<Note[]> {
+        if (candidateRootUuids.size === 0) return [];
+
+        const [clozeNotes, swiftArrowNotes, imageOcclusionNotes, highlightMaskNotes] =
+            await Promise.all([
+                ClozeNote.getNotesFromLogseqBlocks(candidateRootUuids),
+                SwiftArrowNote.getNotesFromLogseqBlocks(candidateRootUuids),
+                ImageOcclusionNote.getNotesFromLogseqBlocks(candidateRootUuids),
+                HighlightMaskNote.getNotesFromLogseqBlocks(candidateRootUuids)
+            ]);
+        const nonMultilineNotes: Note[] = [
+            ...clozeNotes,
+            ...swiftArrowNotes,
+            ...imageOcclusionNotes,
+            ...highlightMaskNotes
+        ];
+        const multilineNotes = await MultilineCardNote.getNotesFromLogseqBlocks(
+            nonMultilineNotes,
+            candidateRootUuids
+        );
+        return [...nonMultilineNotes, ...multilineNotes];
+    }
+
+    private async createTargetedSyncPlan(
+        notes: Note[],
+        resolution: TargetedResolution,
+        ankiNoteManager: LazyAnkiNoteManager
+    ): Promise<TargetedSyncPlan> {
+        const toCreateNotes: Note[] = [];
+        const toUpdateNotes: Note[] = [];
+        const toDeleteNotes: number[] = [];
+        let skippedDelete = 0;
+        const currentIdentities = new Set<string>();
+
+        for (const note of notes) {
+            const identity = `${note.uuid.toLowerCase()}-${note.type}`;
+            currentIdentities.add(identity);
+            const ankiId = note.getAnkiId();
+            if (ankiId == null || Number.isNaN(ankiId)) toCreateNotes.push(note);
+            else toUpdateNotes.push(note);
+        }
+
+        const priorRecords = new Map(
+            [...resolution.affectedIdentities]
+                .map((identity) => targetedSyncIndex.getRecord(identity))
+                .filter((record) => record != null)
+                .map((record) => [record.identity, record])
+        );
+        for (const deletedRootUuid of resolution.explicitlyDeletedRootUuids) {
+            for (const record of targetedSyncIndex.getRecordsForRoot(deletedRootUuid)) {
+                priorRecords.set(record.identity, record);
+            }
+        }
+
+        for (const record of priorRecords.values()) {
+            if (currentIdentities.has(record.identity)) continue;
+
+            const deletionWasExplicit = resolution.explicitlyDeletedRootUuids.has(record.rootUuid);
+            const rootStillExists = deletionWasExplicit
+                ? false
+                : (await LogseqProxy.Editor.getBlock(record.rootUuid)) != null;
+            if (!deletionWasExplicit && !rootStillExists) {
+                return {
+                    toCreateNotes: [],
+                    toUpdateNotes: [],
+                    toDeleteNotes: [],
+                    skippedDelete,
+                    ambiguousReason: `Card ${record.identity} disappeared without a stable deletion identity.`
+                };
+            }
+
+            const ankiId = ankiNoteManager.getAnkiIdByUuidType(record.identity);
+            if (ankiId == null || Number.isNaN(ankiId)) skippedDelete += 1;
+            else toDeleteNotes.push(ankiId);
+        }
+
+        return {toCreateNotes, toUpdateNotes, toDeleteNotes, skippedDelete};
+    }
+
+    private hasSyncFailures(syncResult: SyncResult): boolean {
+        return (
+            Object.keys(syncResult.failedCreated).length > 0 ||
+            Object.keys(syncResult.failedUpdated).length > 0 ||
+            Object.keys(syncResult.failedDeleted).length > 0
+        );
+    }
+
+    private skipTargetedSync(
+        changes: TargetedChangeBatch,
+        reason: string,
+        startedAtMs: number,
+        startedAt: string,
+        affectedCardCount = 0
+    ): LogseqToAnkiSyncOutcome {
+        TargetedAutoSyncState.markFullSyncRequired(reason);
+        this.recordTargetedDiagnostics(
+            changes,
+            changes.classification === "targeted" ? "ambiguous" : changes.classification,
+            reason,
+            affectedCardCount,
+            startedAtMs,
+            startedAt,
+            true
+        );
+        return {status: "skipped", changed: false};
+    }
+
+    private finishFailedTargetedSync(
+        changes: TargetedChangeBatch,
+        syncResult: SyncResult,
+        reason: string,
+        startedAtMs: number,
+        startedAt: string,
+        affectedCardCount: number
+    ): LogseqToAnkiSyncOutcome {
+        TargetedAutoSyncState.markFullSyncRequired(reason);
+        this.attachSyncTiming(syncResult, "auto", startedAtMs, startedAt);
+        this.persistSyncDiagnostics(syncResult);
+        this.recordTargetedDiagnostics(
+            changes,
+            "ambiguous",
+            reason,
+            affectedCardCount,
+            startedAtMs,
+            startedAt,
+            true
+        );
+        this.displayAutoResults(syncResult);
+        return {status: "failed", changed: syncResult.changed, result: syncResult};
+    }
+
+    private recordTargetedFailure(changes: TargetedChangeBatch, reason: string): void {
+        const nowMs = Date.now();
+        const now = new Date(nowMs).toISOString();
+        TargetedAutoSyncState.markFullSyncRequired(reason);
+        this.recordTargetedDiagnostics(changes, "ambiguous", reason, 0, nowMs, now, true);
+    }
+
+    private recordTargetedDiagnostics(
+        changes: TargetedChangeBatch,
+        classification: TargetedSyncDiagnostics["classification"],
+        reason: string,
+        affectedCardCount: number,
+        startedAtMs: number,
+        startedAt: string,
+        fullSyncRequired: boolean
+    ): void {
+        const completedAtMs = Date.now();
+        TargetedAutoSyncState.recordDiagnostics({
+            schemaVersion: 1,
+            classification,
+            reason,
+            changedEntities: changes.changedEntities,
+            deletedBlockUuids: changes.deletedBlockUuids,
+            txAttributes: changes.txAttributes,
+            outlinerOps: changes.outlinerOps,
+            eventCount: changes.eventCount,
+            affectedCardCount,
+            startedAt,
+            completedAt: new Date(completedAtMs).toISOString(),
+            durationMs: completedAtMs - startedAtMs,
+            fullSyncRequired
+        });
+    }
+
     private attachSyncTiming(
         syncResult: SyncResult,
         mode: "manual" | "auto",
@@ -212,6 +610,37 @@ export class LogseqToAnkiSync {
         syncResult.startedAt = startedAt;
         syncResult.completedAt = new Date(completedAtMs).toISOString();
         syncResult.durationMs = completedAtMs - startedAtMs;
+    }
+
+    private persistSyncDiagnostics(syncResult: SyncResult): void {
+        const settings = LogseqProxy.Settings.getPluginSettings();
+        if (!settings.debug?.includes(LoggerCategory.SyncMain)) return;
+
+        try {
+            LogseqProxy.Settings.updatePluginSettings({
+                lastSyncDiagnostics: JSON.stringify({
+                    schemaVersion: 1,
+                    pluginVersion: pkg.version,
+                    graphName: this.graphName,
+                    mode: syncResult.mode,
+                    startedAt: syncResult.startedAt,
+                    completedAt: syncResult.completedAt,
+                    durationMs: syncResult.durationMs,
+                    collectedNoteCount: this.collectedNoteCount,
+                    resultCounts: {
+                        created: syncResult.toCreateNotes.length,
+                        updated: syncResult.toUpdateNotes.length,
+                        deleted: syncResult.toDeleteNotes.length,
+                        skippedUpdate: syncResult.skippedUpdate,
+                        skippedDelete: syncResult.skippedDelete,
+                        mediaUpdated: syncResult.mediaUpdated
+                    },
+                    phases: this.syncPhaseTimings
+                })
+            });
+        } catch (error) {
+            logger.warn("Failed to persist sync diagnostics", error);
+        }
     }
 
     private async createNotes(
@@ -330,30 +759,37 @@ export class LogseqToAnkiSync {
     private async collectAllNotes(silentProgress = false): Promise<Note[]> {
         const scanNotification = new ProgressNotification(
             `Scanning Logseq Graph <span style="opacity: 0.8">[${this.graphName}]</span>:`,
-            5,
+            6,
             "graph",
             {silent: silentProgress}
         );
 
+        let completedInitialScans = 0;
+        const collectNoteType = async <T extends Note>(
+            noteType: string,
+            collect: () => Promise<T[]>
+        ): Promise<T[]> => {
+            const collectedNotes = await this.measureSyncPhase(`scan ${noteType} notes`, collect);
+            completedInitialScans += 1;
+            scanNotification.increment();
+            scanNotification.updateMessage(
+                `Scanning ${this.graphName}: ${completedInitialScans}/4 note types found (${collectedNotes.length} ${noteType})`
+            );
+            if (completedInitialScans < 4) scanNotification.setIndeterminate();
+            return collectedNotes;
+        };
+
         let notes: Array<Note> = [];
         const [clozeNotes, swiftArrowNotes, imageOcclusionNotes, highlightMaskNotes] =
             await Promise.all([
-                ClozeNote.getNotesFromLogseqBlocks().then((r) => {
-                    scanNotification.increment();
-                    return r;
-                }),
-                SwiftArrowNote.getNotesFromLogseqBlocks().then((r) => {
-                    scanNotification.increment();
-                    return r;
-                }),
-                ImageOcclusionNote.getNotesFromLogseqBlocks().then((r) => {
-                    scanNotification.increment();
-                    return r;
-                }),
-                HighlightMaskNote.getNotesFromLogseqBlocks().then((r) => {
-                    scanNotification.increment();
-                    return r;
-                })
+                collectNoteType("cloze", () => ClozeNote.getNotesFromLogseqBlocks()),
+                collectNoteType("swift-arrow", () => SwiftArrowNote.getNotesFromLogseqBlocks()),
+                collectNoteType("image-occlusion", () =>
+                    ImageOcclusionNote.getNotesFromLogseqBlocks()
+                ),
+                collectNoteType("highlight-mask", () =>
+                    HighlightMaskNote.getNotesFromLogseqBlocks()
+                )
             ]);
         notes = [
             ...notes,
@@ -362,12 +798,25 @@ export class LogseqToAnkiSync {
             ...imageOcclusionNotes,
             ...highlightMaskNotes
         ];
-        notes = [...notes, ...(await MultilineCardNote.getNotesFromLogseqBlocks(notes))];
+        scanNotification.updateMessage(`Scanning ${this.graphName}: loading multiline card trees`);
+        scanNotification.setIndeterminate();
+        const multilineNotes = await this.measureSyncPhase("scan multiline notes", () =>
+            MultilineCardNote.getNotesFromLogseqBlocks(notes)
+        );
+        notes = [...notes, ...multilineNotes];
         scanNotification.increment();
 
-        return await sortAsync(notes, async (a) => {
-            return (await LogseqProxy.Editor.getBlock(a.uuid))?.id ?? 0;
-        });
+        scanNotification.updateMessage(
+            `Scanning ${this.graphName}: ordering ${notes.length} notes`
+        );
+        scanNotification.setIndeterminate();
+        const sortedNotes = await this.measureSyncPhase("sort collected notes", () =>
+            sortAsync(notes, async (a) => {
+                return (await LogseqProxy.Editor.getBlock(a.uuid))?.id ?? 0;
+            })
+        );
+        scanNotification.increment();
+        return sortedNotes;
     }
 
     private async persistLogseqBlockIds(notes: Note[]): Promise<void> {
@@ -461,12 +910,12 @@ export class LogseqToAnkiSync {
         return {toCreateNotes, toUpdateNotes, toDeleteNotes};
     }
 
-    private getAutoSelection(
+    private selectAllSyncChanges(
         toCreateNotes: Note[],
         toUpdateNotes: Note[],
         toDeleteNotes: number[]
     ): {toCreateNotes: Note[]; toUpdateNotes: Note[]; toDeleteNotes: number[]} {
-        logger.info("Auto sync plan created", {
+        logger.info("Full Sync plan accepted without interactive selection", {
             toCreate: toCreateNotes.length,
             toUpdate: toUpdateNotes.length,
             toDelete: toDeleteNotes.length
@@ -758,17 +1207,22 @@ export class LogseqToAnkiSync {
 
     private async measureSyncPhase<T>(phase: string, task: () => Promise<T>): Promise<T> {
         const startTime = performance.now();
+        const startedAt = new Date().toISOString();
         try {
             const result = await task();
+            const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
+            this.syncPhaseTimings.push({phase, startedAt, durationMs, status: "completed"});
             logger.info("Sync phase completed", {
                 phase,
-                timeTaken: `${(performance.now() - startTime).toFixed(2)}ms`
+                timeTaken: `${durationMs.toFixed(2)}ms`
             });
             return result;
         } catch (e) {
+            const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
+            this.syncPhaseTimings.push({phase, startedAt, durationMs, status: "failed"});
             logger.warn("Sync phase failed", {
                 phase,
-                timeTaken: `${(performance.now() - startTime).toFixed(2)}ms`
+                timeTaken: `${durationMs.toFixed(2)}ms`
             });
             throw e;
         }

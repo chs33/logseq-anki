@@ -2,6 +2,7 @@ import {autoUpdate, computePosition, flip, offset, type Placement, shift} from "
 import {WindowBridge} from "../../logseq/WindowBridge";
 import React, {type FC, useCallback, useEffect, useRef, useState} from "../React";
 import {createPortal} from "../ReactDOM";
+import {createOpaqueSurfaceStyle} from "../styles/opaqueSurface";
 
 interface LogseqTooltipProps {
     content: React.ReactNode;
@@ -91,12 +92,14 @@ export const LogseqTooltip: FC<LogseqTooltipProps> = ({
                 role="tooltip"
                 className="z-[9999] overflow-hidden rounded-md border shadow-md animate-in fade-in-0 zoom-in-95"
                 style={{
+                    ...createOpaqueSurfaceStyle(
+                        "--ls-popover-background-color",
+                        "--ls-primary-background-color"
+                    ),
                     position: "fixed",
                     left: position.x,
                     top: position.y,
                     visibility: isPositioned ? "visible" : "hidden",
-                    backgroundColor:
-                        "var(--ls-popover-background-color, var(--ls-primary-background-color))",
                     color: "var(--ls-popover-text-color, var(--ls-primary-text-color))",
                     borderColor: "var(--ls-border-color)",
                     padding: "0.375rem 0.75rem",
@@ -111,6 +114,7 @@ export const LogseqTooltip: FC<LogseqTooltipProps> = ({
 
     return (
         <>
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: tooltip trigger preserves the wrapped component's semantics */}
             <span
                 ref={triggerRef}
                 onMouseEnter={handleMouseEnter}

@@ -41,7 +41,7 @@ async function main(baseInfo: LSPluginBaseInfo) {
     logseq.App.registerCommandPalette(
         {
             key: `logseq-anki-sync-command-palette-${baseInfo.id}`,
-            label: `Start Logseq to Anki Sync`,
+            label: `Full Logseq to Anki Sync`,
             keybinding: {mode: "global", binding: ""}
         },
         syncLogseqToAnki

@@ -29,6 +29,13 @@ const logger = createLogger(LoggerCategory.LogseqWrappers);
  * access serialized on every platform, including production Windows builds.
  */
 const getLogseqLock = new AwaitLock();
+const blocksWithChildrenCache = new Map<number, Promise<BlockEntity | null>>();
+
+const getBlockIdentityCacheKey = (srcBlock: BlockIdentity | EntityID): number =>
+    objectHashOptimized(srcBlock);
+
+const withoutChildren = (block: BlockEntity | null): BlockEntity | null =>
+    block == null ? null : ({...block, children: []} as BlockEntity);
 
 export namespace LogseqProxy {
     export class Editor {
@@ -40,17 +47,39 @@ export namespace LogseqProxy {
                 }
             ): Promise<BlockEntity | null> => {
                 srcBlock = typeof srcBlock === "string" ? srcBlock.toLowerCase() : srcBlock; // Convert to lowercase to avoid case sensitivity issues
-                let block = null;
-                await getLogseqLock.acquireAsync();
-                try {
-                    block = await LogseqPropertiesHelperProxy.getBlock(srcBlock, opts);
-                } catch (e) {
-                    logger.error(e);
-                    if (!opts.suppressErrors) throw e;
-                } finally {
-                    getLogseqLock.release();
+                const identityCacheKey = getBlockIdentityCacheKey(srcBlock);
+
+                if (opts.includeChildren !== true) {
+                    const blockWithChildren = blocksWithChildrenCache.get(identityCacheKey);
+                    if (blockWithChildren) {
+                        return withoutChildren(await blockWithChildren);
+                    }
                 }
-                return block;
+
+                const blockPromise = (async (): Promise<BlockEntity | null> => {
+                    let block = null;
+                    await getLogseqLock.acquireAsync();
+                    try {
+                        block = await LogseqPropertiesHelperProxy.getBlock(srcBlock, opts);
+                    } catch (e) {
+                        logger.error(e);
+                        if (!opts.suppressErrors) throw e;
+                    } finally {
+                        getLogseqLock.release();
+                    }
+                    return block;
+                })();
+
+                if (opts.includeChildren === true) {
+                    blocksWithChildrenCache.set(identityCacheKey, blockPromise);
+                    void blockPromise.catch(() => {
+                        if (blocksWithChildrenCache.get(identityCacheKey) === blockPromise) {
+                            blocksWithChildrenCache.delete(identityCacheKey);
+                        }
+                    });
+                }
+
+                return await blockPromise;
             },
             {cacheKey: (arguments_) => objectHashOptimized(arguments_)}
         );
@@ -234,12 +263,8 @@ export namespace LogseqProxy {
             return result as T;
         }
 
-        static registeredDBListeners: Array<
-            (event: {blocks: any[]; txData: any; txMeta: any}) => void
-        > = [];
-        static registerDBChangeListener(
-            listener: (event: {blocks: any[]; txData: any; txMeta: any}) => void
-        ): void {
+        static registeredDBListeners: Array<(event: unknown) => void> = [];
+        static registerDBChangeListener(listener: (event: unknown) => void): void {
             DB.registeredDBListeners.push(listener);
         }
     }
@@ -321,9 +346,10 @@ export namespace LogseqProxy {
         }
     }
     export function init() {
-        logseq.DB.onChanged(async ({blocks, txData, txMeta}) => {
+        logseq.DB.onChanged(async (rawEvent) => {
+            clearReadCaches();
             for (const listener of LogseqProxy.DB.registeredDBListeners) {
-                listener({blocks: [...blocks], txData, txMeta});
+                listener(rawEvent);
             }
         });
         logseq.onSettingsChanged((newSettings, oldSettings) => {
@@ -342,18 +368,23 @@ export namespace LogseqProxy {
             }
         });
         WindowParentBridge.addEventListener("syncLogseqToAnkiComplete", () => {
-            logger.info(
-                "Clearing memoization caches for getBlock, getPage, getPageBlocksTree, namespace helpers, listFilesOfCurrentGraph, getCurrentGraph, and checkCurrentIsDbGraph"
-            );
-            pMemoizeClear(LogseqProxy.Editor.getBlock);
-            pMemoizeClear(LogseqProxy.Editor.getPage);
-            pMemoizeClear(LogseqProxy.Editor.getPageBlocksTree);
-            pMemoizeClear(LogseqProxy.Editor.getParentNamespacePages);
-            pMemoizeClear(LogseqProxy.Editor.getFullPageName);
-            pMemoizeClear(LogseqProxy.Assets.listFilesOfCurrentGraph);
-            pMemoizeClear(LogseqProxy.App.checkCurrentIsDbGraph);
-            pMemoizeClear(LogseqProxy.App.getCurrentGraph);
-            pMemoizeClear(LogseqProxy.App.getCurrentGraphNameForLogseqLinks);
+            clearReadCaches(true);
         });
+    }
+
+    function clearReadCaches(includeGraphAndAssets = false): void {
+        logger.info("Clearing memoized Logseq reads", {includeGraphAndAssets});
+        pMemoizeClear(LogseqProxy.Editor.getBlock);
+        blocksWithChildrenCache.clear();
+        pMemoizeClear(LogseqProxy.Editor.getPage);
+        pMemoizeClear(LogseqProxy.Editor.getPageBlocksTree);
+        pMemoizeClear(LogseqProxy.Editor.getParentNamespacePages);
+        pMemoizeClear(LogseqProxy.Editor.getFullPageName);
+        if (!includeGraphAndAssets) return;
+
+        pMemoizeClear(LogseqProxy.Assets.listFilesOfCurrentGraph);
+        pMemoizeClear(LogseqProxy.App.checkCurrentIsDbGraph);
+        pMemoizeClear(LogseqProxy.App.getCurrentGraph);
+        pMemoizeClear(LogseqProxy.App.getCurrentGraphNameForLogseqLinks);
     }
 }

@@ -1,6 +1,12 @@
-import type {BlockEntity} from "@logseq/libs/dist/LSPlugin";
-import {describe, expect, it} from "vitest";
+import type {BlockEntity, PageEntity} from "@logseq/libs/dist/LSPlugin";
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {LogseqPropertiesHelper} from "../../../src/logseq/LogseqPropertiesHelper";
+import {LogseqProxy} from "../../../src/logseq/LogseqProxy";
+
+afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
 
 describe("LogseqPropertiesHelper.addStripedPropertyPrefixes", () => {
     it("should strip :user.property/name-suffix format to just name (inclusive - keeps original keys)", () => {
@@ -270,5 +276,301 @@ describe("LogseqPropertiesHelper.addStripedPropertyPrefixes + handleTagProperty 
         expect(result.deck).toBe("Testx");
         expect(result.extra).toBe("Some extra value");
         expect(result.tagIds).toEqual([1, 2]);
+    });
+});
+
+describe("LogseqPropertiesHelper entity property processing", () => {
+    const processBlock = async (
+        block: BlockEntity,
+        isDbGraph: boolean,
+        includeChildren = false
+    ): Promise<void> =>
+        await (
+            LogseqPropertiesHelper as unknown as {
+                processBlock: (
+                    block: BlockEntity,
+                    isDbGraph: boolean,
+                    includeChildren?: boolean
+                ) => Promise<void>;
+            }
+        ).processBlock(block, isDbGraph, includeChildren);
+
+    it("keeps normalized block tags when the DB entity contains raw tag objects", async () => {
+        const block = {
+            uuid: "test-uuid",
+            content: "Test content",
+            properties: {
+                deck: "Existing deck",
+                tags: [{id: 3523, name: "card-group"}],
+                tagIds: [{id: 3523}]
+            },
+            tags: [{id: 3523, name: "card-group"}]
+        } as unknown as BlockEntity;
+
+        vi.stubGlobal("logseq", {
+            Editor: {
+                getBlockProperties: vi.fn().mockResolvedValue({
+                    ":block/tags": ["card-group"],
+                    deck: "Fetched deck"
+                })
+            }
+        });
+        vi.spyOn(LogseqProxy.Settings, "getPluginSettings").mockReturnValue({
+            inheritPropertiesFromTags: false
+        } as ReturnType<typeof LogseqProxy.Settings.getPluginSettings>);
+
+        await processBlock(block, false);
+
+        expect(block.properties.tags).toEqual(["card-group"]);
+        expect(block.properties.tagIds).toEqual([3523]);
+        expect(block.properties.deck).toBe("Existing deck");
+    });
+
+    it("skips the property API for property-free DB blocks and their children", async () => {
+        const getBlockProperties = vi.fn();
+        const block = {
+            uuid: "root-uuid",
+            content: "Root",
+            properties: {},
+            tags: [],
+            children: [
+                {
+                    uuid: "child-uuid",
+                    content: "Child",
+                    properties: {},
+                    tags: [],
+                    children: []
+                }
+            ]
+        } as unknown as BlockEntity;
+
+        vi.stubGlobal("logseq", {Editor: {getBlockProperties}});
+        vi.spyOn(LogseqProxy.Settings, "getPluginSettings").mockReturnValue({
+            inheritPropertiesFromTags: false
+        } as ReturnType<typeof LogseqProxy.Settings.getPluginSettings>);
+
+        await processBlock(block, true, true);
+
+        expect(getBlockProperties).not.toHaveBeenCalled();
+        expect(block.properties).toEqual({});
+        expect((block.children[0] as BlockEntity).properties).toEqual({});
+        expect(block.content.match(/^uuid:: root-uuid$/gm)).toHaveLength(1);
+        expect(
+            (block.children[0] as BlockEntity).content.match(/^uuid:: child-uuid$/gm)
+        ).toHaveLength(1);
+    });
+
+    it.each([
+        ["tagged", {tags: [{id: 7, name: "card"}]}],
+        ["aliased", {alias: [{id: 8}]}],
+        ["user-property", {":user.property/deck-suffix": {id: 9}}],
+        ["plugin-property", {":plugin.property.test/extra": "value"}],
+        ["Logseq-property", {":logseq.property/heading": 2}]
+    ])("hydrates %s DB blocks through the property API", async (_caseName, extraBlockFields) => {
+        const getBlockProperties = vi.fn().mockResolvedValue({deck: "Fetched deck"});
+        const block = {
+            uuid: "test-uuid",
+            content: "Test content",
+            properties: {},
+            tags: [],
+            children: [],
+            ...extraBlockFields
+        } as unknown as BlockEntity;
+
+        vi.stubGlobal("logseq", {Editor: {getBlockProperties}});
+        vi.spyOn(LogseqProxy.Settings, "getPluginSettings").mockReturnValue({
+            inheritPropertiesFromTags: false
+        } as ReturnType<typeof LogseqProxy.Settings.getPluginSettings>);
+
+        await processBlock(block, true);
+
+        expect(getBlockProperties).toHaveBeenCalledOnce();
+        expect(getBlockProperties).toHaveBeenCalledWith("test-uuid");
+        expect(block.properties.deck).toBe("Fetched deck");
+    });
+
+    it("keeps normalized page tags when the DB entity contains raw tag objects", async () => {
+        const page = {
+            id: 42,
+            properties: {
+                deck: "Existing deck",
+                tags: [{id: 7, name: "Page"}],
+                tagIds: [{id: 7}]
+            },
+            tags: [{id: 7, name: "Page"}]
+        } as unknown as PageEntity;
+
+        vi.stubGlobal("logseq", {
+            Editor: {
+                getPageProperties: vi.fn().mockResolvedValue({
+                    ":block/tags": ["Page"],
+                    deck: "Fetched deck"
+                })
+            }
+        });
+        vi.spyOn(LogseqProxy.Settings, "getPluginSettings").mockReturnValue({
+            inheritPropertiesFromTags: false
+        } as ReturnType<typeof LogseqProxy.Settings.getPluginSettings>);
+
+        await (
+            LogseqPropertiesHelper as unknown as {
+                processPage: (page: PageEntity, isDbGraph: boolean) => Promise<void>;
+            }
+        ).processPage(page, true);
+
+        expect(page.properties.tags).toEqual(["Page"]);
+        expect(page.properties.tagIds).toEqual([7]);
+        expect(page.properties.deck).toBe("Existing deck");
+    });
+});
+
+describe("LogseqPropertiesHelper DB graph DataScript compatibility", () => {
+    const helper = LogseqPropertiesHelper as unknown as {
+        buildDbGraphBlockByUuidQuery: (uuid: string, includeChildren?: boolean) => string;
+        buildDbGraphBlockByEntityIdQuery: (entityId: number, includeChildren?: boolean) => string;
+        getDbGraphBlockFromDatascript: (
+            srcBlock: string | number,
+            includeChildren?: boolean
+        ) => Promise<BlockEntity | null>;
+        normalizeDatascriptBlock: (block: Record<string, any>) => BlockEntity | null;
+    };
+
+    it.each([
+        () => helper.buildDbGraphBlockByUuidQuery("00000000-0000-0000-0000-000000000001"),
+        () => helper.buildDbGraphBlockByEntityIdQuery(42)
+    ])("does not pull the Logseq 2.0 :block/left scalar as a reference", (buildQuery) => {
+        expect(buildQuery()).not.toContain("{:block/left");
+    });
+
+    it("requests the complete child tree in the root query only when requested", () => {
+        const uuid = "00000000-0000-0000-0000-000000000001";
+
+        expect(helper.buildDbGraphBlockByUuidQuery(uuid, false)).not.toContain(":block/_parent");
+        expect(helper.buildDbGraphBlockByUuidQuery(uuid, true)).toContain(
+            "{[:block/_parent :as :block/children] ...}"
+        );
+    });
+
+    it("preserves the Logseq 2.0 block order returned by the wildcard pull", () => {
+        const block = helper.normalizeDatascriptBlock({
+            id: 42,
+            uuid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+            title: "Card content",
+            order: "a0"
+        });
+
+        expect(block?.order).toBe("a0");
+    });
+
+    it("preserves a scalar legacy left value without converting it to an empty entity", () => {
+        const block = helper.normalizeDatascriptBlock({
+            id: 42,
+            uuid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+            title: "Card content",
+            left: 41
+        });
+
+        expect(block?.left).toBe(41);
+    });
+
+    it("normalizes and orders every level of a recursively pulled child tree", () => {
+        const block = helper.normalizeDatascriptBlock({
+            id: 1,
+            uuid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+            title: "Root",
+            children: [
+                {
+                    id: 3,
+                    uuid: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+                    title: "Second",
+                    order: "b"
+                },
+                {
+                    id: 2,
+                    uuid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+                    title: "First",
+                    order: "a",
+                    children: [
+                        {
+                            id: 4,
+                            uuid: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+                            title: "Nested",
+                            order: "a"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        expect(block?.children.map((child) => child.uuid)).toEqual([
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        ]);
+        expect((block?.children[0] as BlockEntity).children[0].uuid).toBe(
+            "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        );
+    });
+
+    it("hydrates a recursive child tree with one DataScript request", async () => {
+        const datascriptQuery = vi.fn().mockResolvedValue([
+            [
+                {
+                    id: 1,
+                    uuid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+                    title: "Root",
+                    children: [
+                        {
+                            id: 2,
+                            uuid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+                            title: "Child",
+                            order: "a"
+                        }
+                    ]
+                }
+            ]
+        ]);
+        vi.stubGlobal("logseq", {DB: {datascriptQuery}});
+
+        const block = await helper.getDbGraphBlockFromDatascript(
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            true
+        );
+
+        expect(datascriptQuery).toHaveBeenCalledOnce();
+        expect(datascriptQuery.mock.calls[0][0]).toContain(
+            "{[:block/_parent :as :block/children] ...}"
+        );
+        expect(block?.children).toHaveLength(1);
+        expect(block?.children[0].uuid).toBe("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    });
+
+    it("uses the DataScript fallback directly when DB graph children are requested", async () => {
+        const block = {
+            id: 42,
+            uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            content: "Card content",
+            properties: {},
+            children: []
+        } as unknown as BlockEntity;
+        const checkCurrentIsDbGraph = vi
+            .spyOn(helper as any, "checkCurrentIsDbGraph")
+            .mockResolvedValue(true);
+        const getDbGraphBlockFromDatascript = vi
+            .spyOn(helper as any, "getDbGraphBlockFromDatascript")
+            .mockResolvedValue(block);
+        const getBlockWithTimeout = vi
+            .spyOn(helper as any, "getBlockWithTimeout")
+            .mockResolvedValue(null);
+        const processBlock = vi.spyOn(helper as any, "processBlock").mockResolvedValue(undefined);
+
+        const result = await LogseqPropertiesHelper.getBlock(block.uuid, {
+            includeChildren: true
+        });
+
+        expect(result).toBe(block);
+        expect(checkCurrentIsDbGraph).toHaveBeenCalledOnce();
+        expect(getDbGraphBlockFromDatascript).toHaveBeenCalledWith(block.uuid, true);
+        expect(getBlockWithTimeout).not.toHaveBeenCalled();
+        expect(processBlock).toHaveBeenCalledWith(block, true, true);
     });
 });

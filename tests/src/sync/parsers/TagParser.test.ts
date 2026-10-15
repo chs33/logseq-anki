@@ -23,6 +23,20 @@ vi.mock("../../../../src/logseq/LogseqProxy", async () => {
     };
 });
 
+describe("TagParser tag normalization", () => {
+    test("reports a descriptive error when a non-string tag reaches the parser", () => {
+        const normalizeTags = (
+            TagParser as unknown as {
+                normalizeTags: (tags: unknown[]) => string[];
+            }
+        ).normalizeTags;
+
+        expect(() => normalizeTags(["valid-tag", {id: 3523, name: "card-group"}])).toThrowError(
+            "[TagParser] Expected every tag to be a string, but tag at index 1 was object."
+        );
+    });
+});
+
 describe("TagParser E2E Tests", () => {
     describe("File Mode Tag Resolution", () => {
         let page: PageEntity;

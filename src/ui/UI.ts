@@ -3,7 +3,10 @@ import "./styles/main.css";
 import {createLogger, LoggerCategory} from "../logger";
 import {LogseqProxy} from "../logseq/LogseqProxy";
 import {WindowBridge} from "../logseq/WindowBridge";
+import {WindowParentBridge} from "../logseq/WindowParentBridge";
 import {createRoot, type Root} from "./ReactDOM";
+import {applyPopupSurfaceTheme, normalizeResolvedThemeCssValue} from "./styles/opaqueSurface";
+import {getLogseqThemeFallbacks, type LogseqThemeMode} from "./styles/themeFallbacks";
 
 const logger = createLogger(LoggerCategory.UI);
 
@@ -68,6 +71,7 @@ export class UI {
         UI.modalIdCounter = 0;
         UI.isVisible = false;
         UI.appRoot = null;
+        UI.updatePopupSurfaceTheme(null);
     }
 
     public static init() {
@@ -76,6 +80,9 @@ export class UI {
 
         // Listen for theme changes
         logseq.App.onThemeChanged(() => {
+            setTimeout(() => UI.loadThemeVariables(), 100);
+        });
+        logseq.App.onThemeModeChanged(() => {
             setTimeout(() => UI.loadThemeVariables(), 100);
         });
 
@@ -89,6 +96,7 @@ export class UI {
 
         // Hide main ui on plugin unload
         LogseqProxy.App.registerPluginUnloadListener(() => {
+            UI.updatePopupSurfaceTheme(null);
             logseq.hideMainUI({restoreEditingCursor: true});
         });
     }
@@ -186,6 +194,15 @@ export class UI {
             "--ls-popover-text-color"
         ];
 
+        const themeMode = await UI.getThemeMode();
+        const fallbackValues = getLogseqThemeFallbacks(themeMode);
+        const style = WindowBridge.getBody().style;
+        style.colorScheme = themeMode;
+        UI.updatePopupSurfaceTheme(themeMode);
+        for (const [property, value] of Object.entries(fallbackValues)) {
+            style.setProperty(property, value);
+        }
+
         try {
             // @ts-ignore - logseq.UI.resolveThemeCssPropsVals is not in types
             const vals = await logseq.UI.resolveThemeCssPropsVals(props);
@@ -194,14 +211,39 @@ export class UI {
                 return;
             }
 
-            const style = WindowBridge.getBody().style;
             Object.entries(vals).forEach(([k, v]) => {
-                style.setProperty(k, v as string);
+                const resolvedValue = normalizeResolvedThemeCssValue(v);
+                if (resolvedValue == null) {
+                    const fallbackValue = fallbackValues[k];
+                    if (fallbackValue == null) style.removeProperty(k);
+                    else style.setProperty(k, fallbackValue);
+                    return;
+                }
+                style.setProperty(k, resolvedValue);
             });
         } catch (error) {
             logger.error("Failed to load theme variables:", error);
             // Fallback to CSS defaults defined in main.css
         }
+    }
+
+    private static async getThemeMode(): Promise<LogseqThemeMode> {
+        try {
+            const configs = await logseq.App.getUserConfigs();
+            if (configs.preferredThemeMode === "dark") return "dark";
+            if (configs.preferredThemeMode === "light") return "light";
+        } catch (error) {
+            logger.warn("Failed to read Logseq theme mode; using system preference", error);
+        }
+
+        return WindowBridge.getWindow().matchMedia?.("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+    }
+
+    private static updatePopupSurfaceTheme(mode: LogseqThemeMode | null): void {
+        const popupSurfaceHosts = new Set([WindowBridge.getBody(), WindowParentBridge.getBody()]);
+        popupSurfaceHosts.forEach((host) => applyPopupSurfaceTheme(host.style, mode));
     }
 
     /**
