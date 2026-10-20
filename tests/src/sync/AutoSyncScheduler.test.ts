@@ -141,7 +141,11 @@ describe("AutoSyncScheduler", () => {
         applySettingsChange({autoSyncEnabled: true});
 
         expect(runner).toHaveBeenCalledOnce();
-        expect(runner).toHaveBeenCalledWith({mode: "manual", fullSyncSelection: "all"});
+        expect(runner).toHaveBeenCalledWith({
+            mode: "manual",
+            fullSyncSelection: "all",
+            triggerAnkiWebSync: true
+        });
         await Promise.resolve();
         await Promise.resolve();
 
@@ -224,7 +228,11 @@ describe("AutoSyncScheduler", () => {
         await vi.advanceTimersByTimeAsync(120_000);
 
         expect(runner).toHaveBeenCalledOnce();
-        expect(runner).toHaveBeenCalledWith({mode: "manual", fullSyncSelection: "all"});
+        expect(runner).toHaveBeenCalledWith({
+            mode: "manual",
+            fullSyncSelection: "all",
+            triggerAnkiWebSync: true
+        });
 
         targetedSyncIndex.replaceAll("Graph", [], []);
         resolveInitialization({status: "completed", changed: false});
@@ -240,6 +248,18 @@ describe("AutoSyncScheduler", () => {
                 eventCount: 1,
                 blocks: [expect.objectContaining({title: "Changed during Full Sync"})]
             }
+        });
+    });
+
+    test("initialization respects the disabled AnkiWeb setting", async () => {
+        testState.settings = {autoSyncAnkiWebAfterChanges: false};
+        initScheduler();
+        applySettingsChange({autoSyncEnabled: true});
+
+        expect(runner).toHaveBeenCalledWith({
+            mode: "manual",
+            fullSyncSelection: "all",
+            triggerAnkiWebSync: false
         });
     });
 
@@ -401,6 +421,71 @@ describe("AutoSyncScheduler", () => {
             affectedCardCount: 0,
             fullSyncRequired: true
         });
+    });
+
+    test("ignores metadata-free changes to Logseq's hidden built-in views", async () => {
+        initScheduler();
+        await enableAutoSync();
+        emitDatabaseChange({
+            blocks: [
+                {
+                    id: 15326,
+                    uuid: "00000006-5909-6900-2000-000000000000",
+                    title: "Linked references",
+                    page: {id: 180},
+                    parent: {id: 180},
+                    featureType: "linked-references",
+                    viewFor: {id: 6865}
+                },
+                {
+                    id: 180,
+                    uuid: "00000004-1906-3437-5800-000000000000",
+                    name: "$$$views",
+                    title: "$$$views",
+                    "builtIn?": true,
+                    "hide?": true
+                }
+            ],
+            txData: [],
+            txMeta: {},
+            deletedBlockUuids: new Set<string>()
+        });
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(runner).not.toHaveBeenCalled();
+        expect(testState.settings.autoSyncFullSyncRequired).not.toBe(true);
+    });
+
+    test("targets user block snapshots when Logseq omits transaction metadata", async () => {
+        initScheduler();
+        await enableAutoSync();
+        emitDatabaseChange({
+            blocks: [
+                {
+                    id: 15329,
+                    uuid: "6ad3b707-8065-4c10-ae83-f0ca8791baf6",
+                    title: "you see function definition, why it can still have default argument",
+                    page: {id: 4727},
+                    parent: {id: 4847},
+                    properties: {}
+                }
+            ],
+            txData: [],
+            txMeta: {},
+            deletedBlockUuids: new Set<string>()
+        });
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(testState.settings.autoSyncFullSyncRequired).not.toBe(true);
+        expect(runner).toHaveBeenCalledWith(
+            expect.objectContaining({
+                mode: "auto",
+                targetedChanges: expect.objectContaining({
+                    classification: "targeted",
+                    blocks: [expect.objectContaining({id: 15329})]
+                })
+            })
+        );
     });
 
     test("relevant settings and template inputs require Full Sync", async () => {

@@ -3,6 +3,7 @@ import {
     ClozeNote,
     getInlineHTMLForLogseqRenderedCloze,
     getLogseqPluginClozesFromContent,
+    getUnsupportedLogseqClozes,
     insertLineBreakAfterLogseqCloze,
     shouldInsertSourceLineBreakAfterLogseqCloze
 } from "../../../src/anki-notes/ClozeNote";
@@ -36,6 +37,25 @@ describe("ClozeNote syntax detection", () => {
             {
                 content:
                     "refers to connect your trading server rack *directly* to the exchange's network through some fiber cable, which means the connection is private ",
+                lineBreakAfter: false,
+                lineBreakHasLeadingWhitespace: false
+            }
+        ]);
+    });
+
+    test("extracts multiple clozes containing bold markdown and commas", () => {
+        const clozes = getLogseqPluginClozesFromContent(
+            "git fetch updates your {{c1 **all**,  **remote tracking** branch changes, }} note it is not your {{c1 local branch}} block"
+        );
+
+        expect(clozes).toEqual([
+            {
+                content: "**all**,  **remote tracking** branch changes, ",
+                lineBreakAfter: false,
+                lineBreakHasLeadingWhitespace: false
+            },
+            {
+                content: "local branch",
                 lineBreakAfter: false,
                 lineBreakHasLeadingWhitespace: false
             }
@@ -103,6 +123,37 @@ describe("ClozeNote syntax detection", () => {
 
         expect(getInlineHTMLForLogseqRenderedCloze(htmlFile.html)).toBe(
             "trading rack <i>directly</i> to ARCA, NYSE"
+        );
+    });
+
+    test("renders bold markdown and punctuation as inline Logseq cloze HTML", async () => {
+        const htmlFile = await LogseqToHtmlConverter.convertToHTMLFile(
+            "**all**,  **remote tracking** branch changes, ",
+            "markdown",
+            {displayTags: true, processRefEmbeds: false}
+        );
+
+        expect(getInlineHTMLForLogseqRenderedCloze(htmlFile.html)).toBe(
+            "<b>all</b>,  <b>remote tracking</b> branch changes,"
+        );
+    });
+
+    test("finds an unsupported Logseq cloze when the cloze is the mutation root", () => {
+        const unsupportedCloze = document.createElement("span");
+        unsupportedCloze.title = "Unsupported macro name: c1";
+        unsupportedCloze.innerHTML = "{{c1 **all**,  **remote tracking** branch changes, }}";
+
+        expect(getUnsupportedLogseqClozes(unsupportedCloze)).toEqual([unsupportedCloze]);
+    });
+
+    test("finds unsupported Logseq clozes below a mutation root without duplicates", () => {
+        const mutationRoot = document.createElement("div");
+        mutationRoot.innerHTML =
+            '<span title="Unsupported macro name: c1">first</span>' +
+            '<span title="Unsupported macro name: c1">second</span>';
+
+        expect(getUnsupportedLogseqClozes(mutationRoot)).toEqual(
+            Array.from(mutationRoot.querySelectorAll("span"))
         );
     });
 

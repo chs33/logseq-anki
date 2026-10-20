@@ -9,6 +9,7 @@ import {
 } from "./syncLogseqToAnki";
 import {
     classifyLogseqDBChange,
+    isIgnorableLogseqSystemViewChange,
     mergeClassifiedDBChanges
 } from "./targeted/LogseqDBChangeClassifier";
 import {TargetedAutoSyncState} from "./targeted/TargetedAutoSyncState";
@@ -159,7 +160,11 @@ export class AutoSyncScheduler {
 
         let outcome: LogseqToAnkiSyncOutcome;
         try {
-            outcome = await this.syncRunner({mode: "manual", fullSyncSelection: "all"});
+            outcome = await this.syncRunner({
+                mode: "manual",
+                fullSyncSelection: "all",
+                triggerAnkiWebSync: this.triggerAnkiWebSync
+            });
         } catch (error) {
             outcome = {status: "failed", changed: false, error};
             logger.error("Full Sync failed while initializing targeted Auto Sync", error);
@@ -253,6 +258,10 @@ export class AutoSyncScheduler {
 
     private queueDBChange(event: unknown): void {
         if (this.disposed || (!this.enabled && !this.initializing)) return;
+        if (isIgnorableLogseqSystemViewChange(event)) {
+            logger.info("Ignoring Logseq hidden system-view metadata change");
+            return;
+        }
         if (!this.initializing && TargetedAutoSyncState.isFullSyncRequired()) {
             logger.warn("Targeted auto-sync ignored because Full Sync is already required", {
                 reason: TargetedAutoSyncState.getFullSyncRequiredReason()

@@ -70,6 +70,64 @@ const isTargetableAttribute = (attribute: string): boolean =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
 
+const readEntityId = (value: unknown): number | null => {
+    if (typeof value === "number") return value;
+    if (isRecord(value) && typeof value.id === "number") return value.id;
+    return null;
+};
+
+const readEntityValue = (entity: Record<string, unknown>, keys: string[]): unknown => {
+    const properties = isRecord(entity.properties) ? entity.properties : undefined;
+    for (const key of keys) {
+        if (key in entity) return entity[key];
+        if (properties && key in properties) return properties[key];
+    }
+    return undefined;
+};
+
+const isHiddenBuiltInViewsPage = (entity: Record<string, unknown>): boolean => {
+    const hasViewsPageName = entity.name === "$$$views" || entity.title === "$$$views";
+    const builtIn = readEntityValue(entity, [
+        "builtIn?",
+        "built-in?",
+        "logseq.property/built-in?",
+        ":logseq.property/built-in?"
+    ]);
+    const hidden = readEntityValue(entity, [
+        "hide?",
+        "logseq.property/hide?",
+        ":logseq.property/hide?"
+    ]);
+    return hasViewsPageName && builtIn === true && hidden === true;
+};
+
+const isViewDefinitionForPage = (
+    entity: Record<string, unknown>,
+    viewsPageIds: Set<number>
+): boolean => {
+    const pageId = readEntityId(entity.page);
+    const parentId = readEntityId(entity.parent);
+    const featureType = readEntityValue(entity, [
+        "featureType",
+        "feature-type",
+        "logseq.property.view/feature-type",
+        ":logseq.property.view/feature-type"
+    ]);
+    const viewFor = readEntityValue(entity, [
+        "viewFor",
+        "view-for",
+        "logseq.property/view-for",
+        ":logseq.property/view-for"
+    ]);
+    return (
+        pageId != null &&
+        parentId != null &&
+        viewsPageIds.has(pageId) &&
+        viewsPageIds.has(parentId) &&
+        (featureType != null || viewFor != null)
+    );
+};
+
 const isValidDatom = (value: unknown): value is IDatom =>
     Array.isArray(value) &&
     value.length === 5 &&
@@ -101,6 +159,36 @@ export class UnexpectedLogseqDBEventError extends Error {}
 
 export interface ClassifierOptions {
     strict?: boolean;
+}
+
+/**
+ * Logseq lazily materializes hidden view definitions under its built-in `$$$views` page. In the
+ * installed DB bridge these UI-only transactions can contain complete entity snapshots while
+ * omitting both transaction datoms and an outliner operation. They do not affect card content,
+ * eligibility, or dependencies, so they can be ignored instead of scheduling unnecessary
+ * targeted work.
+ */
+export function isIgnorableLogseqSystemViewChange(value: unknown): boolean {
+    if (!isRecord(value) || !Array.isArray(value.blocks) || value.blocks.length === 0) return false;
+    if (!Array.isArray(value.txData) || value.txData.length > 0) return false;
+    if (value.txMeta != null && !isRecord(value.txMeta)) return false;
+    if ((value.txMeta as Record<string, unknown> | undefined)?.outlinerOp != null) return false;
+
+    const deletedBlockUuids = normalizeDeletedBlockUuids(value.deletedBlockUuids);
+    if (deletedBlockUuids == null || deletedBlockUuids.length > 0) return false;
+    if (!value.blocks.every(isRecord)) return false;
+
+    const viewsPages = value.blocks.filter(isHiddenBuiltInViewsPage);
+    if (viewsPages.length === 0) return false;
+    const viewsPageIds = new Set(
+        viewsPages.map((page) => readEntityId(page.id)).filter((id): id is number => id != null)
+    );
+    if (viewsPageIds.size === 0) return false;
+
+    return value.blocks.every(
+        (entity) =>
+            isHiddenBuiltInViewsPage(entity) || isViewDefinitionForPage(entity, viewsPageIds)
+    );
 }
 
 const unexpected = (
@@ -199,14 +287,6 @@ export function classifyLogseqDBChange(
         );
     }
 
-    if (!outlinerOp && txData.length === 0 && deletedBlockUuids.length === 0) {
-        return {
-            classification: "ambiguous",
-            reason: "DB change has neither a recognized operation nor transaction datoms.",
-            ...common
-        };
-    }
-
     if (outlinerOp === "delete-blocks" && deletedBlockUuids.length === 0) {
         return {
             classification: "ambiguous",
@@ -219,7 +299,11 @@ export function classifyLogseqDBChange(
         classification: "targeted",
         reason: outlinerOp
             ? `Recognized Logseq operation “${outlinerOp}”.`
-            : "Recognized DataScript transaction datoms.",
+            : txData.length > 0
+              ? "Recognized DataScript transaction datoms."
+              : deletedBlockUuids.length > 0
+                ? "Received stable deleted block UUIDs."
+                : "Received complete changed entity snapshots without transaction metadata.",
         ...common
     };
 }

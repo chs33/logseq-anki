@@ -133,7 +133,7 @@ export const addSettingsToLogseq = async () => {
             default: true,
             title: "Sync AnkiWeb after auto sync changes? (Recommended: Enabled)",
             description:
-                "When enabled, auto sync triggers AnkiWeb sync after it creates, updates, or deletes local Anki content."
+                "When enabled, the initial Full Sync and later targeted Auto Sync runs trigger AnkiWeb sync after creating, updating, or deleting local Anki content."
         },
         {
             key: "syncOverwriteList",

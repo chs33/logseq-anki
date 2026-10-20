@@ -52,6 +52,7 @@ const logger = createLogger(LoggerCategory.SyncMain);
 
 export interface LogseqToAnkiSyncOptions {
     mode?: "manual" | "auto";
+    /** Auto mode syncs by default; manual mode syncs only when this is explicitly true. */
     triggerAnkiWebSync?: boolean;
     forceRegenerate?: boolean;
     targetedChanges?: TargetedChangeBatch;
@@ -1056,8 +1057,11 @@ export class LogseqToAnkiSync {
         syncResult: SyncResult,
         options: LogseqToAnkiSyncOptions
     ): Promise<void> {
-        const shouldSyncAnkiWeb =
-            options.mode === "auto" && options.triggerAnkiWebSync !== false && syncResult.changed;
+        const ankiWebSyncRequested =
+            options.mode === "auto"
+                ? options.triggerAnkiWebSync !== false
+                : options.triggerAnkiWebSync === true;
+        const shouldSyncAnkiWeb = ankiWebSyncRequested && syncResult.changed;
 
         if (!shouldSyncAnkiWeb) return;
 
@@ -1069,7 +1073,7 @@ export class LogseqToAnkiSync {
             syncResult.ankiWebSyncError = errorMessage;
             logger.error("AnkiWeb sync failed", e);
             logseq.UI.showMsg(
-                `Auto sync updated Anki, but AnkiWeb sync failed: ${errorMessage}`,
+                `${options.mode === "auto" ? "Auto sync" : "Full Sync"} updated Anki, but AnkiWeb sync failed: ${errorMessage}`,
                 "error",
                 {
                     timeout: 8000

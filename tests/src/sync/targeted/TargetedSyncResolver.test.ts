@@ -179,6 +179,35 @@ describe("TargetedSyncResolver", () => {
         expect(result.affectedIdentities).not.toContain("child-b-multiline_card");
     });
 
+    test.each([
+        "move-blocks",
+        "indent-outdent-blocks"
+    ])("%s reconciles prior card-group children when Logseq reports only the parent", async (outlinerOp) => {
+        const changedCardGroupParent = makeBlock(10, "group", undefined, {
+            properties: {tags: ["card-group"]}
+        });
+        index.replaceAll(
+            "Graph",
+            [
+                makeRecord("moved-child-multiline_card", "moved-child", {
+                    ancestorBlockUuids: ["group"]
+                })
+            ],
+            []
+        );
+
+        const result = await resolveTargetedChanges(
+            makeBatch([changedCardGroupParent], {
+                outlinerOps: [outlinerOp],
+                txAttributes: [":block/parent"]
+            }),
+            index
+        );
+
+        expect(result.affectedIdentities).toEqual(new Set(["moved-child-multiline_card"]));
+        expect(result.candidateRootUuids).toEqual(new Set(["group", "moved-child"]));
+    });
+
     test("editing descendants targets the note that renders them", async () => {
         const descendant = makeBlock(2, "descendant", 1);
         index.replaceAll(
@@ -213,6 +242,25 @@ describe("TargetedSyncResolver", () => {
                 outlinerOps: ["set-block-properties"],
                 txAttributes: [":user.property/deck", ":user.property/direction", ":block/tags"]
             }),
+            index
+        );
+
+        expect(result.affectedIdentities).toContain("child-multiline_card");
+        expect(result.candidateRootUuids).toContain("child");
+    });
+
+    test("metadata-free snapshots conservatively target semantic descendants", async () => {
+        const parent = makeBlock(1, "parent", undefined, {
+            properties: {deck: "Changed"}
+        });
+        index.replaceAll(
+            "Graph",
+            [makeRecord("child-multiline_card", "child", {ancestorBlockUuids: ["parent"]})],
+            []
+        );
+
+        const result = await resolveTargetedChanges(
+            makeBatch([parent], {outlinerOps: [], txAttributes: []}),
             index
         );
 

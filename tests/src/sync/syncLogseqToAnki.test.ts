@@ -286,6 +286,26 @@ describe("LogseqToAnkiSync modes", () => {
         );
     });
 
+    test("Auto Sync initialization syncs changed Full Sync results to AnkiWeb", async () => {
+        const sync = buildSync(createSyncResult(true));
+
+        await sync.sync({
+            mode: "manual",
+            fullSyncSelection: "all",
+            triggerAnkiWebSync: true
+        });
+
+        expect(ankiConnectMock.invoke).toHaveBeenCalledWith("sync", {});
+    });
+
+    test("ordinary manual sync does not implicitly sync AnkiWeb", async () => {
+        const sync = buildSync(createSyncResult(true));
+
+        await sync.sync({mode: "manual"});
+
+        expect(ankiConnectMock.invoke).not.toHaveBeenCalledWith("sync", {});
+    });
+
     test("manual mode immediately reports that the sync started", async () => {
         const sync = buildSync(createSyncResult(false));
 

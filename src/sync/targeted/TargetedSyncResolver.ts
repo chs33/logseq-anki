@@ -13,8 +13,12 @@ import type {TargetedChangeBatch, TargetedResolution} from "./types";
 const MAX_REFERENCE_EXPANSION = 5000;
 const MAX_REFERENCE_DEPTH = 32;
 
-const SEMANTIC_OUTLINER_OPERATIONS = new Set([
+// Hierarchy moves can be emitted with only the changed parent snapshot. Reconcile its previously
+// indexed descendants so cards moved out of a card-group are removed from Anki.
+const ANCESTOR_DEPENDENT_OUTLINER_OPERATIONS = new Set([
     "cycle-todos",
+    "indent-outdent-blocks",
+    "move-blocks",
     "remove-block-property",
     "rename-page",
     "save-block",
@@ -199,8 +203,13 @@ export async function resolveTargetedChanges(
     const affectedIdentities = new Set<string>();
     const candidateRootUuids = new Set<string>();
     const explicitlyDeletedRootUuids = new Set(changes.deletedBlockUuids.map(normalizeUuid));
-    const semanticOperation =
-        changes.outlinerOps.some((operation) => SEMANTIC_OUTLINER_OPERATIONS.has(operation)) ||
+    const changeSemanticsAreUnspecified =
+        changes.outlinerOps.length === 0 && changes.txAttributes.length === 0;
+    const ancestorDependentsMayHaveChanged =
+        changeSemanticsAreUnspecified ||
+        changes.outlinerOps.some((operation) =>
+            ANCESTOR_DEPENDENT_OUTLINER_OPERATIONS.has(operation)
+        ) ||
         txAttributesAffectRendering(changes.txAttributes);
 
     try {
@@ -211,7 +220,7 @@ export async function resolveTargetedChanges(
             const directDependents = index.getDirectDependents(uuid);
             addIdentities(affectedIdentities, directDependents);
 
-            if (semanticOperation || didHierarchyChange(block, index)) {
+            if (ancestorDependentsMayHaveChanged || didHierarchyChange(block, index)) {
                 addIdentities(affectedIdentities, index.getAncestorDependents(uuid));
             }
 

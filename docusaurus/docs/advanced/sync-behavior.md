@@ -42,7 +42,16 @@ Targeted note discovery constrains the existing note-type DataScript queries to 
 
 Changes that arrive during a sync are coalesced into one follow-up run, so they are not lost and cannot create overlapping syncs. Auto sync is still turned off whenever the plugin starts and must be enabled for the current session.
 
+Hierarchy-changing move and indent/outdent events also reconcile cards previously indexed beneath
+the changed parent. This covers Logseq events that report the old card-group parent without the
+moved child: moving a direct child out from under `card-group` removes that child's corresponding
+Anki note during the targeted Auto Sync run. Order-only moves remain scoped to the reordered card.
+
 Targeted auto sync depends on an in-memory dependency index produced by a successful **Full Sync**. Turning Auto Sync on runs that Full Sync first and applies its complete reconciliation plan without opening the manual change-selection or deletion-confirmation dialogs. Targeted event processing becomes active only after the reconciliation and index build both succeed. Failing the initialization leaves Auto Sync off. Safely classified changes received during initialization are retained for a targeted follow-up run.
+
+When **Sync AnkiWeb after auto sync changes** is enabled, this initialization Full Sync also runs
+AnkiWeb sync if it created, updated, or deleted local Anki content. The same rule applies to later
+targeted runs; no AnkiWeb request is made when a run produces no local changes.
 
 After initialization, if the index is unavailable, an event is unsupported, a deletion cannot be tied to a known card identity, or a global rendering setting changes, auto sync stops and displays **Full sync required** with a reason. It never hides uncertainty by silently starting a full graph scan. A successful Full Sync rebuilds the index and clears this state. Auto Sync is disabled again when the plugin starts, so enabling it in a new Logseq session performs a fresh Full Sync.
 
@@ -55,6 +64,15 @@ The targeted classifier is based on the event bridge shipped by the installed Lo
 - SDK `txData` entries use the five-item DataScript datom form `[entityId, attribute, value, transactionId, added]`. In the installed DB-graph pipeline, `txData` is deliberately an empty array, so targeting primarily uses snapshots, deleted UUIDs, and `txMeta`.
 - Clojure keyword keys are converted to camel case before delivery, so `:outliner-op` arrives as `txMeta.outlinerOp` and `:deleted-block-uuids` arrives as `deletedBlockUuids`.
 - The installed pipeline publishes the hook only when at least one changed block is present and the changed-block count is at most 1,000. Payloads outside the recognized contract are not treated as successful auto syncs.
+
+Logseq can also lazily create UI-only view definitions under its hidden built-in `$$$views` page.
+These events may contain the changed view snapshots without an outliner operation or transaction
+datoms. Auto Sync ignores a metadata-free event only when every changed entity is either that
+hidden built-in page or a recognizable view definition directly beneath it. Logseq can also omit
+transaction metadata for ordinary user edits. When the event still contains complete snapshots
+with stable block/page IDs and UUIDs, Auto Sync targets those entities conservatively and expands
+all semantic dependencies. Malformed events and known graph-wide operations still require Full
+Sync.
 
 Each targeted run records its classification, reason, changed entities, affected-card count, duration, and whether Full Sync is required. Deletions are executed only for identities already known by the Full Sync index.
 

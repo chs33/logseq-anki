@@ -20,6 +20,17 @@ export type LogseqPluginClozeSource = {
     lineBreakHasLeadingWhitespace: boolean;
 };
 
+const LOGSEQ_UNSUPPORTED_CLOZE_SELECTOR = 'span[title^="Unsupported macro name: c"]';
+
+export const getUnsupportedLogseqClozes = (root: ParentNode): Element[] => {
+    const rootElement = root.nodeType === Node.ELEMENT_NODE ? (root as Element) : null;
+    const matchingRoot = rootElement?.matches(LOGSEQ_UNSUPPORTED_CLOZE_SELECTOR)
+        ? [rootElement]
+        : [];
+
+    return [...matchingRoot, ...root.querySelectorAll(LOGSEQ_UNSUPPORTED_CLOZE_SELECTOR)];
+};
+
 export const shouldInsertSourceLineBreakAfterLogseqCloze = (
     sourceCloze: LogseqPluginClozeSource | undefined,
     renderClozeMarcosInLogseq: boolean
@@ -297,21 +308,16 @@ export class ClozeNote extends Note {
             };
 
             const displayAnkiCloze = async (elem: ParentNode) => {
-                const firstCloze = elem.querySelector('span[title^="Unsupported macro name: c"]');
-                if (!firstCloze) return;
+                const observedClozes = getUnsupportedLogseqClozes(elem);
+                if (observedClozes.length === 0) return;
 
                 const blockElements = new Set<Element>();
-                const observedClozes = elem.querySelectorAll(
-                    'span[title^="Unsupported macro name: c"]'
-                );
                 observedClozes.forEach((cloze) => {
                     blockElements.add(getBlockElement(cloze));
                 });
 
                 for (const blockElement of blockElements) {
-                    const clozes = Array.from(
-                        blockElement.querySelectorAll('span[title^="Unsupported macro name: c"]')
-                    );
+                    const clozes = getUnsupportedLogseqClozes(blockElement);
                     const sourceClozes = await getSourceClozesFromBlock(
                         blockElement,
                         clozes.length
@@ -363,7 +369,6 @@ export class ClozeNote extends Note {
                 if (mutations.length <= 8) {
                     for (const mutation of mutations) {
                         mutation.addedNodes.forEach((addedNode) => {
-                            if (!addedNode.childNodes.length) return;
                             const queryableNode = getQueryableAddedNode(addedNode);
                             if (!queryableNode) return;
                             void displayAnkiCloze(queryableNode);
